@@ -73,6 +73,7 @@ Helpers (`helpers/transcribe.py`, `helpers/render.py`, etc.) live alongside this
 
 - **`transcribe.py <video>`** — single-file Scribe call. `--num-speakers N` optional. Cached.
 - **`transcribe_batch.py <videos_dir>`** — 4-worker parallel transcription. Use for multi-take.
+- **`transcribe_whisper.py <video>`** — local Whisper fallback (faster-whisper, CPU `int8`). Emits Scribe-compatible JSON so `pack_transcripts.py` works unchanged. Use only when offline / no Scribe quota / cost-sensitive — Scribe stays the default. Requires `pip install -e '.[whisper]'`. `--model` defaults to `medium`; `--language pt` (etc.) skips auto-detection.
 - **`pack_transcripts.py --edit-dir <dir>`** — `transcripts/*.json` → `takes_packed.md` (phrase-level, break on silence ≥ 0.5s).
 - **`timeline_view.py <video> <start> <end>`** — filmstrip + waveform PNG. On-demand visual drill-down. **Not a scan tool** — use it at decision points, not constantly.
 - **`render.py <edl.json> -o <out>`** — per-segment extract → concat → overlays (PTS-shifted) → subtitles LAST. `--preview` for 720p fast. `--build-subtitles` to generate master.srt inline.
