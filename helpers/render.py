@@ -490,6 +490,62 @@ def apply_loudnorm_two_pass(
     return True
 
 
+# -------- Music mixing with voice ducking ------------------------------------
+
+
+def mix_music_with_ducking(
+    video_path: Path,
+    music_path: Path,
+    out_path: Path,
+    duck_db: float = 18.0,
+) -> None:
+    """Mix background music into video with sidechaincompress ducking.
+
+    Music is looped if shorter than the video. Voice (from video) ducks the
+    music by `duck_db` decibels during speech via sidechaincompress.
+
+    duck_db=12 → subtle (music stays audible under speech)
+    duck_db=18 → standard (music clearly recedes under speech)
+    duck_db=20+ → strong (music almost disappears under speech)
+    """
+    # Music weight in mix: 0.3 keeps it clearly background
+    music_weight = 0.3
+    threshold = 0.02
+    ratio = 4.0
+    attack = 200   # ms — how fast ducking kicks in
+    release = 1000  # ms — how fast music comes back
+
+    # Use gain to implement the duck_db level on top of base sidechaincompress
+    duck_gain = round(1.0 - (duck_db / 40.0), 3)  # rough linear approximation
+
+    filter_complex = (
+        # Loop music indefinitely, trim to video length
+        f"[1:a]aloop=loop=-1:size=2e+09,asetpts=N/SR/TB[music_loop];"
+        # Sidechain: music ducks when voice is present
+        f"[music_loop][0:a]sidechaincompress="
+        f"threshold={threshold}:ratio={ratio}:attack={attack}:release={release}:"
+        f"gain={duck_gain}[music_ducked];"
+        # Mix ducked music with voice
+        f"[0:a][music_ducked]amix=inputs=2:duration=first:"
+        f"weights=1 {music_weight}[a_out]"
+    )
+
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-nostats",
+        "-i", str(video_path),
+        "-i", str(music_path),
+        "-filter_complex", filter_complex,
+        "-map", "0:v",
+        "-map", "[a_out]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    print(f"mixing music (ducking -{duck_db} dB under speech) → {out_path.name}")
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
 # -------- Final compositing (Rule 1 + Rule 4) -------------------------------
 
 
@@ -601,6 +657,20 @@ def main() -> None:
         action="store_true",
         help="Skip audio loudness normalization. Default is on (-14 LUFS, -1 dBTP, LRA 11).",
     )
+    ap.add_argument(
+        "--music",
+        type=Path,
+        default=None,
+        metavar="MUSIC_FILE",
+        help="Background music file to mix in. Loops automatically if shorter than video.",
+    )
+    ap.add_argument(
+        "--duck-level",
+        type=float,
+        default=18.0,
+        metavar="DB",
+        help="How many dB to reduce music under speech via sidechaincompress. Default: 18.",
+    )
     args = ap.parse_args()
 
     edl_path = args.edl.resolve()
@@ -638,18 +708,39 @@ def main() -> None:
                 print(f"warning: subtitles path in EDL does not exist: {subs_path}")
                 subs_path = None
 
-    # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
+    # 4. Composite (overlays + subtitles LAST) → intermediate path
     overlays = edl.get("overlays") or []
-    if args.no_loudnorm:
-        # Composite directly to final output
+    music_path = args.music.resolve() if args.music else None
+    if music_path and not music_path.exists():
+        sys.exit(f"music file not found: {music_path}")
+
+    # Determine intermediate path chain: composite → [music] → [loudnorm] → out
+    needs_music = music_path is not None
+    needs_loudnorm = not args.no_loudnorm
+
+    if not needs_music and not needs_loudnorm:
         build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
-    else:
-        # Composite to a temp file, then run loudnorm → final output
+    elif not needs_music and needs_loudnorm:
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
         build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)
+    elif needs_music and not needs_loudnorm:
+        tmp_composite = out_path.with_suffix(".premusic.mp4")
+        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        mix_music_with_ducking(tmp_composite, music_path, out_path, duck_db=args.duck_level)
+        tmp_composite.unlink(missing_ok=True)
+    else:
+        # composite → music → loudnorm → final
+        tmp_composite = out_path.with_suffix(".premusic.mp4")
+        tmp_music = out_path.with_suffix(".prenorm.mp4")
+        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        mix_music_with_ducking(tmp_composite, music_path, tmp_music, duck_db=args.duck_level)
+        tmp_composite.unlink(missing_ok=True)
+        print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
+        apply_loudnorm_two_pass(tmp_music, out_path, preview=args.draft)
+        tmp_music.unlink(missing_ok=True)
 
     size_mb = out_path.stat().st_size / (1024 * 1024)
     print(f"\ndone: {out_path} ({size_mb:.1f} MB)")
