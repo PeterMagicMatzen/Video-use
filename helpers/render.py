@@ -518,9 +518,9 @@ def mix_music_with_ducking(
         raise ValueError(f"duck_db must be non-negative, got {duck_db}")
 
     # Map duck_db to sidechaincompress ratio (ffmpeg valid range: 1–20).
+    # ratio=1.0 means no compression (duck_db=0 → no ducking effect).
     # duck_db=12 → ratio≈4 (subtle), duck_db=18 → ratio≈9 (standard), duck_db=20 → ratio≈13
-    # Clamped to [1.5, 20.0] to stay within ffmpeg's accepted range.
-    ratio = round(min(20.0, max(1.5, duck_db ** 1.3 / 10.0)), 1)
+    ratio = round(min(20.0, max(1.0, duck_db ** 1.3 / 10.0)), 1)
 
     filter_complex = (
         # Loop music indefinitely so short tracks cover the full video
