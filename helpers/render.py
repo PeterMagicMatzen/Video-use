@@ -511,20 +511,21 @@ def mix_music_with_ducking(
     # Music weight in mix: 0.3 keeps it clearly background
     music_weight = 0.3
     threshold = 0.02
-    ratio = 4.0
     attack = 200   # ms — how fast ducking kicks in
     release = 1000  # ms — how fast music comes back
 
-    # Use gain to implement the duck_db level on top of base sidechaincompress
-    duck_gain = round(1.0 - (duck_db / 40.0), 3)  # rough linear approximation
+    # Map duck_db to sidechaincompress ratio (valid range: 1–20).
+    # ratio controls how aggressively the compressor clamps the music signal.
+    # duck_db=12 → ratio≈4 (subtle), duck_db=18 → ratio≈9 (standard), duck_db=20 → ratio≈13
+    ratio = round(max(1.5, duck_db ** 1.3 / 10.0), 1)
 
     filter_complex = (
-        # Loop music indefinitely, trim to video length
+        # Loop music indefinitely so short tracks cover the full video
         f"[1:a]aloop=loop=-1:size=2e+09,asetpts=N/SR/TB[music_loop];"
-        # Sidechain: music ducks when voice is present
+        # Sidechain: voice signal compresses music when speech is present
         f"[music_loop][0:a]sidechaincompress="
-        f"threshold={threshold}:ratio={ratio}:attack={attack}:release={release}:"
-        f"gain={duck_gain}[music_ducked];"
+        f"threshold={threshold}:ratio={ratio}:attack={attack}:release={release}"
+        f"[music_ducked];"
         # Mix ducked music with voice
         f"[0:a][music_ducked]amix=inputs=2:duration=first:"
         f"weights=1 {music_weight}[a_out]"
