@@ -514,10 +514,13 @@ def mix_music_with_ducking(
     attack = 200   # ms — how fast ducking kicks in
     release = 1000  # ms — how fast music comes back
 
-    # Map duck_db to sidechaincompress ratio (valid range: 1–20).
-    # ratio controls how aggressively the compressor clamps the music signal.
+    if duck_db < 0:
+        raise ValueError(f"duck_db must be non-negative, got {duck_db}")
+
+    # Map duck_db to sidechaincompress ratio (ffmpeg valid range: 1–20).
     # duck_db=12 → ratio≈4 (subtle), duck_db=18 → ratio≈9 (standard), duck_db=20 → ratio≈13
-    ratio = round(max(1.5, duck_db ** 1.3 / 10.0), 1)
+    # Clamped to [1.5, 20.0] to stay within ffmpeg's accepted range.
+    ratio = round(min(20.0, max(1.5, duck_db ** 1.3 / 10.0)), 1)
 
     filter_complex = (
         # Loop music indefinitely so short tracks cover the full video
@@ -670,9 +673,13 @@ def main() -> None:
         type=float,
         default=18.0,
         metavar="DB",
-        help="How many dB to reduce music under speech via sidechaincompress. Default: 18.",
+        help="dB reduction of music under speech (0–40). Default: 18. "
+             "12=subtle, 18=standard, 20+=strong.",
     )
     args = ap.parse_args()
+
+    if not (0 <= args.duck_level <= 40):
+        sys.exit("--duck-level must be between 0 and 40 dB")
 
     edl_path = args.edl.resolve()
     if not edl_path.exists():
