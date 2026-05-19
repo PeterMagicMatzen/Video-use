@@ -716,13 +716,48 @@ def cache_store(cache_dir: Path, key: str, clip_path: Path) -> None:
 # ============================================================================
 
 
+class PipelineError(SystemExit):
+    """SystemExit subclass carrying ffmpeg stderr context for diagnostics.
+
+    Batch loops pattern-match on `stderr_tail` to write a richer failure
+    record. Plain SystemExit raised by pre-flight / validation code keeps
+    working — callers use `getattr(e, 'stderr_tail', '')` so both branches
+    of `try/except SystemExit` flow through the same handler.
+    """
+    def __init__(self, message: str, *, stderr_tail: str = ""):
+        super().__init__(message)
+        self.stderr_tail = stderr_tail
+
+
+def _tail_text(s: str, *, max_lines: int = 30, max_chars: int = 2000) -> str:
+    """Return the last `max_lines` of `s`, capped at `max_chars`.
+
+    Used to attach a readable slice of ffmpeg's stderr to PipelineError —
+    enough to diagnose, not so much that batch summaries balloon.
+    """
+    if not s:
+        return ""
+    lines = s.strip().splitlines()
+    tail = "\n".join(lines[-max_lines:])
+    if len(tail) > max_chars:
+        tail = "...[truncated]...\n" + tail[-(max_chars - 22):]
+    return tail
+
+
 def run_ff(cmd: list[str], desc: str) -> None:
     print(f"  $ {desc}")
     proc = subprocess.run(cmd, capture_output=True, text=True,
                           encoding="utf-8", errors="replace")
     if proc.returncode != 0:
+        # Stream raw stderr to the console so an interactive user sees the
+        # failure live; also attach a bounded tail to the exception so a
+        # batch summary can capture diagnostic context without keeping the
+        # full stderr in memory or in the JSON.
         sys.stderr.write(proc.stderr or "")
-        raise SystemExit(f"ffmpeg failed: {desc}")
+        raise PipelineError(
+            f"ffmpeg failed: {desc}",
+            stderr_tail=_tail_text(proc.stderr or ""),
+        )
 
 
 def probe_duration(path: Path) -> float:
@@ -1346,6 +1381,54 @@ def run_job(job: Job, ffmpeg_version: str) -> dict:
 # ============================================================================
 
 
+def make_failure_record(
+    *,
+    index: int,
+    name: str,
+    error: BaseException,
+    job: "Job | None" = None,
+    manifest_row: dict | None = None,
+) -> dict:
+    """Build a diagnostic failure entry for a batch summary.
+
+    Shape: `{job, ok=False, index, error, stderr_tail, srt, plan, source, output}`.
+
+    `stderr_tail` is non-empty only for `PipelineError` (i.e. ffmpeg failures);
+    plain `SystemExit` from validation paths leaves it as "". When `job` is
+    provided, paths come from the resolved Job; otherwise they fall back to
+    the raw manifest_row dict so rows that crash inside `job_from_dict`
+    still get useful context.
+    """
+    stderr_tail = ""
+    if isinstance(error, PipelineError):
+        stderr_tail = error.stderr_tail or ""
+
+    if job is not None:
+        srt = str(job.srt) if job.srt else None
+        plan = str(job.plan) if job.plan else None
+        source = str(job.source) if job.source else None
+        output = str(job.output) if job.output else None
+    elif manifest_row is not None:
+        srt = manifest_row.get("srt")
+        plan = manifest_row.get("plan")
+        source = manifest_row.get("source")
+        output = manifest_row.get("output")
+    else:
+        srt = plan = source = output = None
+
+    return {
+        "job": name,
+        "ok": False,
+        "index": index,
+        "error": str(error),
+        "stderr_tail": stderr_tail,
+        "srt": srt,
+        "plan": plan,
+        "source": source,
+        "output": output,
+    }
+
+
 def load_manifest(path: Path) -> list[dict]:
     suffix = path.suffix.lower()
     if suffix == ".json":
@@ -1473,7 +1556,10 @@ def main() -> None:
             except SystemExit as e:
                 if args.continue_on_error:
                     print(f"[batch {i}] skipped: {e}")
-                    results.append({"job": row.get("name", f"row{i}"), "ok": False, "error": str(e)})
+                    results.append(make_failure_record(
+                        index=i, name=row.get("name", f"row{i}"),
+                        error=e, job=None, manifest_row=row,
+                    ))
                     continue
                 raise
             try:
@@ -1481,7 +1567,9 @@ def main() -> None:
             except SystemExit as e:
                 if args.continue_on_error:
                     print(f"[batch {i}] FAILED: {e}")
-                    results.append({"job": job.name, "ok": False, "error": str(e)})
+                    results.append(make_failure_record(
+                        index=i, name=job.name, error=e, job=job,
+                    ))
                     continue
                 raise
         summary_path = manifest_path.with_name(manifest_path.stem + "_qc_summary.json")

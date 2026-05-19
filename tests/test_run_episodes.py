@@ -148,6 +148,35 @@ def test_run_episodes_aborts_without_continue_on_error(
 # ---------------------------------------------------------------------------
 
 
+def test_run_episodes_failure_record_includes_paths(
+    runner, helpers_ns, ffmpeg_version, synth_av, tmp_path
+):
+    """When --continue-on-error skips an ep, the record must carry enough
+    context to triage without re-reading the terminal."""
+    batch = tmp_path / "batch"
+    _make_ep(batch / "ep01", synth_av, helpers_ns)
+    _make_ep(batch / "ep02", synth_av, helpers_ns,
+             plan=[(1, 1.0, 2.5), (2, 60.0, 61.5)])  # range overruns 30s synth
+    _make_ep(batch / "ep03", synth_av, helpers_ns)
+
+    summary = runner.run_episodes(
+        batch, ffmpeg_version=ffmpeg_version,
+        continue_on_error=True,
+    )
+    failed = [r for r in summary["results"] if not r.get("ok")]
+    assert len(failed) == 1
+    rec = failed[0]
+    assert rec["job"] == "ep02"
+    assert rec["index"] == 1
+    assert rec["srt"].endswith("script.srt")
+    assert rec["plan"].endswith("edit_plan.json")
+    assert rec["source"].endswith("source.mp4")
+    assert rec["output"].endswith("final.mp4")
+    assert rec["error"]
+    # Pre-extract range-bounds check → no ffmpeg → empty stderr
+    assert rec["stderr_tail"] == ""
+
+
 def test_run_episodes_per_ep_voice(
     runner, helpers_ns, ffmpeg_version, synth_av, synth_voice, tmp_path
 ):

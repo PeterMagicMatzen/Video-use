@@ -26,7 +26,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from srt_driven_edit import Job, run_job, preflight, safe_ascii_name
+    from srt_driven_edit import (
+        Job, run_job, preflight, safe_ascii_name,
+        make_failure_record,
+    )
 except Exception as e:
     raise SystemExit(
         "run_episodes: failed to import from srt_driven_edit.py. "
@@ -146,16 +149,18 @@ def run_episodes(
 
     results: list[dict] = []
     t0 = time.time()
-    for i, ep in enumerate(eps, start=1):
-        print(f"\n[{i}/{len(eps)}] === {ep.name} ===")
+    for i, ep in enumerate(eps):
+        print(f"\n[{i + 1}/{len(eps)}] === {ep.name} ===")
         job = _make_job(ep, opts)
         try:
             qc = run_job(job, ffmpeg_version)
             results.append(qc)
         except SystemExit as e:
             if continue_on_error:
-                print(f"[{i}/{len(eps)}] FAILED: {e}")
-                results.append({"job": ep.name, "ok": False, "error": str(e)})
+                print(f"[{i + 1}/{len(eps)}] FAILED: {e}")
+                results.append(make_failure_record(
+                    index=i, name=ep.name, error=e, job=job,
+                ))
                 continue
             raise
 

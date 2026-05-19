@@ -54,18 +54,19 @@ def run_batch(helpers_ns, manifest_path, ffmpeg_version, *,
             job = sde.job_from_dict(row, defaults, manifest_path.parent, i)
         except SystemExit as e:
             if continue_on_error:
-                results.append({
-                    "job": row.get("name", f"row{i}"),
-                    "ok": False,
-                    "error": str(e),
-                })
+                results.append(sde.make_failure_record(
+                    index=i, name=row.get("name", f"row{i}"),
+                    error=e, job=None, manifest_row=row,
+                ))
                 continue
             raise
         try:
             results.append(sde.run_job(job, ffmpeg_version))
         except SystemExit as e:
             if continue_on_error:
-                results.append({"job": job.name, "ok": False, "error": str(e)})
+                results.append(sde.make_failure_record(
+                    index=i, name=job.name, error=e, job=job,
+                ))
                 continue
             raise
     return results
@@ -185,6 +186,86 @@ def test_batch_csv_manifest(helpers_ns, ffmpeg_version, synth_av, tmp_path):
 # ---------------------------------------------------------------------------
 # 4. Different bg_volume per job is honored (cache must NOT collide)
 # ---------------------------------------------------------------------------
+
+
+def test_run_ff_raises_pipeline_error_with_stderr(helpers_ns, tmp_path):
+    """run_ff must raise PipelineError carrying a non-empty stderr tail."""
+    sde = helpers_ns.sde
+    out = tmp_path / "out.mp4"
+    bogus = tmp_path / "definitely_missing.mp4"
+    with pytest.raises(sde.PipelineError) as exc:
+        sde.run_ff(
+            ["ffmpeg", "-y", "-hide_banner", "-i", str(bogus), str(out)],
+            "intentional failure",
+        )
+    # Subclass of SystemExit → existing handlers keep working
+    assert isinstance(exc.value, SystemExit)
+    assert exc.value.stderr_tail, "stderr_tail should be populated on ffmpeg failure"
+    # The stderr from ffmpeg complaining about a missing input should mention it
+    assert "definitely_missing.mp4" in exc.value.stderr_tail \
+        or "No such file" in exc.value.stderr_tail
+
+
+def test_batch_failure_record_includes_paths(
+    helpers_ns, ffmpeg_version, synth_av, tmp_path
+):
+    """A failed batch row must carry index/srt/plan/source/output for triage."""
+    helpers_ns.write_srt(tmp_path / "s_ok.srt", CUES_2)
+    helpers_ns.write_plan_form_a(tmp_path / "p_ok.json", PLAN_2)
+    helpers_ns.write_srt(tmp_path / "s_bad.srt", CUES_2)
+    # out-of-bounds range (synth_av is 30s; 60s exceeds it) — fails in pre-flight,
+    # no ffmpeg invocation → stderr_tail should stay empty.
+    helpers_ns.write_plan_form_a(tmp_path / "p_bad.json",
+                                  [(1, 1.0, 3.0), (2, 60.0, 62.0)])
+
+    manifest_path = tmp_path / "jobs.json"
+    manifest_path.write_text(json.dumps([
+        {"name": "ok",  "source": str(synth_av),
+         "srt": "s_ok.srt",  "plan": "p_ok.json"},
+        {"name": "bad", "source": str(synth_av),
+         "srt": "s_bad.srt", "plan": "p_bad.json"},
+    ]), encoding="utf-8")
+
+    results = run_batch(helpers_ns, manifest_path, ffmpeg_version,
+                        continue_on_error=True)
+    assert len(results) == 2 and results[0]["ok"] is True
+    failed = results[1]
+    assert failed["ok"] is False
+    assert failed["job"] == "bad"
+    assert failed["index"] == 1
+    assert failed["srt"] and failed["srt"].endswith("s_bad.srt")
+    assert failed["plan"] and failed["plan"].endswith("p_bad.json")
+    assert failed["source"] == str(synth_av)
+    assert failed["output"] and failed["output"].endswith(".mp4")
+    assert failed["error"]
+    # Range-bounds check fires before any ffmpeg → no stderr
+    assert failed["stderr_tail"] == ""
+
+
+def test_batch_malformed_row_failure_record(helpers_ns, ffmpeg_version, tmp_path):
+    """A row that fails inside job_from_dict still gets a usable record.
+
+    No Job was ever constructed, so paths come from the raw manifest row.
+    """
+    manifest_path = tmp_path / "jobs.json"
+    manifest_path.write_text(json.dumps([
+        {"name": "broken",
+         "source": "raw/take.mp4",
+         "srt":    "scripts/missing.srt"},  # no `plan` field
+    ]), encoding="utf-8")
+
+    results = run_batch(helpers_ns, manifest_path, ffmpeg_version,
+                        continue_on_error=True)
+    assert len(results) == 1
+    failed = results[0]
+    assert failed["ok"] is False
+    assert failed["job"] == "broken"
+    assert failed["index"] == 0
+    # Source / SRT come from the row dict because Job construction never completed
+    assert failed["source"] == "raw/take.mp4"
+    assert failed["srt"] == "scripts/missing.srt"
+    assert failed["plan"] is None
+    assert failed["stderr_tail"] == ""
 
 
 def test_batch_per_job_bg_volume(helpers_ns, ffmpeg_version, synth_av, tmp_path):
