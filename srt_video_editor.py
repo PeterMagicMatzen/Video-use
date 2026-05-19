@@ -1,15 +1,17 @@
 """srt_video_editor — minimal viable version.
 
-Reads script.srt + edit_plan.json, validates that their ids match, and
-prints the planned source-time range for each subtitle cue. Does NOT
-touch video — this is the starting scaffold before any ffmpeg work.
+Reads script.srt + edit_plan.json, validates that their ids match,
+prints the planned source-time range for each cue, then cuts each cue's
+range out of source.mp4 into temp/clip_<id:03d>.mp4 with ffmpeg.
 
-Self-contained on purpose: no imports from helpers/ so the whole flow
-fits in one readable file.
+Stays self-contained on purpose: no imports from helpers/, so the whole
+flow fits in one readable file. Concatenation, audio fades, subtitle
+burn, etc. are NOT done here — they live in helpers/srt_driven_edit.py.
 
 Usage:
     python srt_video_editor.py
-    python srt_video_editor.py --srt input/script.srt --plan input/edit_plan.json
+    python srt_video_editor.py --srt input/script.srt --plan input/edit_plan.json \\
+                               --source input/source.mp4 --temp-dir temp/
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -128,6 +131,86 @@ def validate_ids(cues: list[dict], plan: list[dict]) -> None:
 # ---------- report ----------
 
 
+def cut_clip(source: Path, start: float, end: float, out_path: Path) -> None:
+    """Cut [start, end] from source to out_path, re-encoded for frame accuracy.
+
+    Keeps the original audio. `-ss` placed before `-i` makes ffmpeg do a
+    fast container-level seek to the nearest keyframe, then libx264
+    re-encodes from there — frame-accurate at the cost of one encode pass.
+
+    Raises SystemExit with the full ffmpeg command + stderr on failure so
+    the caller never has to scroll the terminal to find what went wrong.
+    """
+    duration = end - start
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-nostats",
+        "-ss", f"{start:.3f}",
+        "-i", str(source),
+        "-t", f"{duration:.3f}",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "192k",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+    except FileNotFoundError:
+        raise SystemExit(
+            "ffmpeg not found on PATH. Install ffmpeg "
+            "(`winget install Gyan.FFmpeg` on Windows, "
+            "`brew install ffmpeg` on macOS) and re-run."
+        )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"ffmpeg failed on {out_path.name} (exit {proc.returncode})\n"
+            f"--- command ---\n{' '.join(cmd)}\n"
+            f"--- stderr ---\n{proc.stderr or '(empty)'}"
+        )
+
+
+def extract_clips(
+    cues: list[dict],
+    plan: list[dict],
+    source: Path,
+    temp_dir: Path,
+) -> list[Path]:
+    """Cut one clip per cue. Returns the list of output paths in cue-id order.
+
+    Filenames are `clip_<id:03d>.mp4`, indexed by SRT id (not position) so
+    each clip is traceable back to its cue at a glance even if ids are
+    sparse or non-consecutive.
+    """
+    plan_by_id = {p["id"]: p for p in plan}
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    print()
+    print(f"cutting {len(cues)} clip(s) -> {temp_dir}/")
+    outputs: list[Path] = []
+    for cue in sorted(cues, key=lambda c: c["id"]):
+        cid = cue["id"]
+        p = plan_by_id[cid]
+        start = p["source_start"]
+        end = p["source_end"]
+        duration = end - start
+        if duration <= 0:
+            raise SystemExit(
+                f"plan id={cid}: source_end {format_ts(end)} <= "
+                f"source_start {format_ts(start)} (duration {duration:.3f}s)"
+            )
+        out_path = temp_dir / f"clip_{cid:03d}.mp4"
+        print(
+            f"  id={cid:>3}  {format_ts(start)} -> {format_ts(end)}  "
+            f"({duration:.3f}s)  -> {out_path}"
+        )
+        cut_clip(source, start, end, out_path)
+        outputs.append(out_path)
+    return outputs
+
+
 def print_report(cues: list[dict], plan: list[dict]) -> None:
     plan_by_id = {p["id"]: p for p in plan}
     print(f"{len(cues)} cue(s), all ids matched.")
@@ -152,15 +235,18 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
             "Minimal SRT-driven editor. Reads script.srt + edit_plan.json, "
-            "validates id matching, prints the planned source range for each "
-            "cue. No ffmpeg, no actual cutting."
+            "validates id matching, prints the planned source range table, "
+            "then cuts each cue out of source.mp4 into temp/clip_*.mp4. "
+            "No concatenation yet."
         ),
     )
     ap.add_argument("--srt", type=Path, default=Path("input/script.srt"))
     ap.add_argument("--plan", type=Path, default=Path("input/edit_plan.json"))
+    ap.add_argument("--source", type=Path, default=Path("input/source.mp4"))
+    ap.add_argument("--temp-dir", type=Path, default=Path("temp"))
     args = ap.parse_args()
 
-    for p in (args.srt, args.plan):
+    for p in (args.srt, args.plan, args.source):
         if not p.is_file():
             raise SystemExit(f"file not found: {p}")
 
@@ -168,6 +254,9 @@ def main() -> None:
     plan = parse_plan(args.plan)
     validate_ids(cues, plan)
     print_report(cues, plan)
+    extract_clips(cues, plan, args.source, args.temp_dir)
+    print()
+    print(f"done. {len(cues)} clip(s) in {args.temp_dir}/")
 
 
 if __name__ == "__main__":
