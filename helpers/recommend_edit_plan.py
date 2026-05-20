@@ -295,29 +295,61 @@ def assign(
     allow_reuse: bool = False,
     min_score: float = 0.35,
     duration_warn_ratio: float = 0.5,
+    monotonic_source: bool = False,
+    max_source_gap_warn: float | None = None,
 ) -> list[Assignment]:
+    """Pick the best candidate for each cue in id order.
+
+    monotonic_source: when True, a candidate is only considered if its
+      start time is >= the previously assigned candidate's end. Prevents
+      narrative time reversal when the same line appears multiple times
+      in the source (the matcher can otherwise pick an earlier instance
+      for a later cue).
+
+    max_source_gap_warn: if set, any adjacent assignment pair whose
+      absolute source-time gap exceeds the threshold gets a warning.
+      Soft signal — does not affect selection.
+
+    Even in non-monotonic mode, a backward source-time jump always
+    earns a warning so the review markdown surfaces it.
+    """
     used: set[int] = set()
     out: list[Assignment] = []
+    # Floor that the NEXT candidate's start must clear under monotonic mode.
+    min_start_floor = 0.0
+
     for cue in cues:
         best_idx = -1
         best_score = -1.0
         for i, cand in enumerate(candidates):
             if not allow_reuse and i in used:
                 continue
+            if monotonic_source and cand.start < min_start_floor - 1e-6:
+                continue
             s = combined_score(cue, cand)
             if s > best_score:
                 best_score = s
                 best_idx = i
+
         warns: list[str] = []
         cand_out: Candidate | None = None
         if best_idx < 0:
-            warns.append("no candidate available")
+            if monotonic_source:
+                warns.append(
+                    f"no candidate available at or after source time "
+                    f"{format_srt_ts(min_start_floor)} (monotonic constraint)"
+                )
+            else:
+                warns.append("no candidate available")
             score_out = 0.0
         else:
             cand_out = candidates[best_idx]
             score_out = best_score
             if not allow_reuse:
                 used.add(best_idx)
+            if monotonic_source:
+                # Next cue must start at or after this candidate's end.
+                min_start_floor = cand_out.end
             if best_score < min_score:
                 warns.append(f"low score {best_score:.3f} < {min_score}")
             if cue.duration > 0:
@@ -336,6 +368,29 @@ def assign(
             cue_id=cue.id, cue_text=cue.text, cue_duration=cue.duration,
             cand=cand_out, score=score_out, warnings=warns,
         ))
+
+    # Post-pass: surface source-time discontinuities as warnings on the
+    # later cue of the pair. Backward jumps are flagged in non-monotonic
+    # mode (impossible by construction in monotonic mode). Large gaps are
+    # flagged in both modes when --max-source-gap is set.
+    for i in range(1, len(out)):
+        prev_cand = out[i - 1].cand
+        curr_cand = out[i].cand
+        if prev_cand is None or curr_cand is None:
+            continue
+        gap = curr_cand.start - prev_cand.end
+        if not monotonic_source and gap < -1e-3:
+            out[i].warnings.append(
+                f"source time goes backward {gap:+.2f}s: prev cue ends at "
+                f"{format_srt_ts(prev_cand.end)}, this cue starts at "
+                f"{format_srt_ts(curr_cand.start)}"
+            )
+        if max_source_gap_warn is not None and abs(gap) > max_source_gap_warn:
+            out[i].warnings.append(
+                f"source-time jump {gap:+.2f}s exceeds "
+                f"--max-source-gap {max_source_gap_warn:.2f}s"
+            )
+
     return out
 
 
@@ -440,6 +495,8 @@ def recommend(
     min_score: float = 0.35,
     allow_reuse: bool = False,
     keep_audio_events: bool = False,
+    monotonic_source: bool = False,
+    max_source_gap_warn: float | None = None,
 ) -> list[Assignment]:
     cues = _parse_srt(script_srt)
     if not cues:
@@ -461,6 +518,8 @@ def recommend(
     assignments = assign(
         cues, candidates,
         allow_reuse=allow_reuse, min_score=min_score,
+        monotonic_source=monotonic_source,
+        max_source_gap_warn=max_source_gap_warn,
     )
 
     if output_format == "form-a":
@@ -520,6 +579,14 @@ def main() -> None:
                     help="allow one candidate to be assigned to multiple cues")
     ap.add_argument("--keep-audio-events", action="store_true",
                     help="keep (laughter) (applause) tokens as candidate context")
+    ap.add_argument("--monotonic-source", action="store_true",
+                    help="require each cue's source range to start at or after "
+                         "the previous cue's match. Prevents narrative time "
+                         "reversal when the same line appears multiple times "
+                         "in the source.")
+    ap.add_argument("--max-source-gap", type=float, default=None,
+                    help="seconds. When set, any adjacent assignment whose "
+                         "|source-time gap| exceeds this earns a warning.")
     ap.add_argument("--format", choices=["form-a", "form-b"], default="form-a",
                     dest="output_format")
     ap.add_argument("-o", "--output", type=Path, required=True,
@@ -542,6 +609,8 @@ def main() -> None:
         min_score=args.min_score,
         allow_reuse=args.allow_reuse,
         keep_audio_events=args.keep_audio_events,
+        monotonic_source=args.monotonic_source,
+        max_source_gap_warn=args.max_source_gap,
     )
 
     matched = sum(1 for a in assignments if a.cand is not None)

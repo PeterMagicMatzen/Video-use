@@ -313,6 +313,133 @@ def test_review_markdown_content(rec, helpers_ns, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_backward_source_jump_warns_by_default(rec, helpers_ns, tmp_path):
+    """When a later cue matches an earlier source position, a warning fires.
+
+    Two cues both want a line that appears twice in the source. Greedy
+    matching with no constraint picks the EARLIEST instance for the
+    earlier-ID cue (because Jaccard score breaks ties by first hit), then
+    the SECOND instance for the later cue — so source time advances and
+    no warning. We construct the inverse: make the earlier-ID cue prefer
+    the LATER instance (longer duration → better duration_similarity),
+    leaving only the earlier instance for the later cue, producing a
+    backward jump that must be flagged.
+    """
+    srt = tmp_path / "script.srt"
+    transcript = tmp_path / "transcript.json"
+    # Cue 1 prefers a 2.0s match; cue 2 prefers a 1.0s match.
+    helpers_ns.write_srt(srt, [
+        (1, 0.0, 2.0, "alpha alpha alpha"),
+        (2, 2.0, 3.0, "alpha alpha alpha"),
+    ])
+    write_transcript(transcript, [
+        # Early instance: 1.0s duration → cue 2 will prefer it
+        {"text": "alpha",  "start": 5.0, "end": 5.4, "type": "word"},
+        {"text": "alpha",  "start": 5.4, "end": 5.7, "type": "word"},
+        {"text": "alpha.", "start": 5.7, "end": 6.0, "type": "word"},
+        # Late instance: 2.0s duration → cue 1 will prefer it
+        {"text": "alpha",  "start": 20.0, "end": 20.7, "type": "word"},
+        {"text": "alpha",  "start": 20.7, "end": 21.4, "type": "word"},
+        {"text": "alpha.", "start": 21.4, "end": 22.0, "type": "word"},
+    ])
+
+    assignments = rec.recommend(
+        script_srt=srt, transcript=transcript, source=Path("fake.mp4"),
+        output=tmp_path / "plan.json",
+    )
+    # Cue 1 picked the 2s late instance, cue 2 picked the 1s early one → backward
+    assert assignments[0].cand.start >= 20.0
+    assert assignments[1].cand.start <= 6.0
+    backward_warnings = [w for w in assignments[1].warnings
+                         if "backward" in w]
+    assert backward_warnings, \
+        f"expected a backward-time warning on cue 2, got: {assignments[1].warnings}"
+
+
+def test_monotonic_source_prevents_backward_jump(rec, helpers_ns, tmp_path):
+    """With --monotonic-source the same setup must NOT pick the early
+    instance for cue 2. The constraint forces cue 2's candidate to start
+    at or after cue 1's end."""
+    srt = tmp_path / "script.srt"
+    transcript = tmp_path / "transcript.json"
+    helpers_ns.write_srt(srt, [
+        (1, 0.0, 2.0, "alpha alpha alpha"),
+        (2, 2.0, 3.0, "alpha alpha alpha"),
+    ])
+    # Same as the previous test PLUS a third late instance so cue 2 has a
+    # forward option under the constraint.
+    write_transcript(transcript, [
+        {"text": "alpha",  "start": 5.0, "end": 5.4, "type": "word"},
+        {"text": "alpha",  "start": 5.4, "end": 5.7, "type": "word"},
+        {"text": "alpha.", "start": 5.7, "end": 6.0, "type": "word"},
+        {"text": "alpha",  "start": 20.0, "end": 20.7, "type": "word"},
+        {"text": "alpha",  "start": 20.7, "end": 21.4, "type": "word"},
+        {"text": "alpha.", "start": 21.4, "end": 22.0, "type": "word"},
+        {"text": "alpha",  "start": 30.0, "end": 30.4, "type": "word"},
+        {"text": "alpha",  "start": 30.4, "end": 30.7, "type": "word"},
+        {"text": "alpha.", "start": 30.7, "end": 31.0, "type": "word"},
+    ])
+
+    assignments = rec.recommend(
+        script_srt=srt, transcript=transcript, source=Path("fake.mp4"),
+        output=tmp_path / "plan.json",
+        monotonic_source=True,
+    )
+    assert assignments[0].cand.start >= 20.0
+    assert assignments[1].cand.start >= assignments[0].cand.end - 1e-6, \
+        "cue 2's candidate must start at or after cue 1's end under monotonic"
+    # No backward warning under monotonic mode
+    assert not any("backward" in w for w in assignments[1].warnings)
+
+
+def test_max_source_gap_warning(rec, helpers_ns, tmp_path):
+    """--max-source-gap fires a warning when the gap exceeds the threshold."""
+    srt = tmp_path / "script.srt"
+    transcript = tmp_path / "transcript.json"
+    helpers_ns.write_srt(srt, [
+        (1, 0.0, 1.0, "alpha"),
+        (2, 1.0, 2.0, "beta"),
+    ])
+    write_transcript(transcript, [
+        {"text": "alpha.", "start": 1.0, "end": 1.5, "type": "word"},
+        # Big gap to next: beta is at 60+ seconds away
+        {"text": "beta.",  "start": 65.0, "end": 65.5, "type": "word"},
+    ])
+    assignments = rec.recommend(
+        script_srt=srt, transcript=transcript, source=Path("fake.mp4"),
+        output=tmp_path / "plan.json",
+        max_source_gap_warn=10.0,  # gap is ~63.5s, well over 10s
+    )
+    jump_warnings = [w for w in assignments[1].warnings
+                     if "source-time jump" in w]
+    assert jump_warnings, \
+        f"expected a big-gap warning, got: {assignments[1].warnings}"
+
+
+def test_monotonic_with_no_forward_candidate_fails(rec, helpers_ns, tmp_path):
+    """If no candidate can satisfy the monotonic constraint, the cue gets
+    the 'no candidate available at or after ...' warning and write_plan
+    hard-fails (per the no-candidate contract)."""
+    srt = tmp_path / "script.srt"
+    transcript = tmp_path / "transcript.json"
+    helpers_ns.write_srt(srt, [
+        (1, 0.0, 1.0, "alpha"),
+        (2, 1.0, 2.0, "beta"),
+    ])
+    write_transcript(transcript, [
+        # alpha matches at 20s, taking cue 1
+        {"text": "alpha.", "start": 20.0, "end": 21.0, "type": "word"},
+        # beta only available BEFORE alpha — monotonic can't reach it
+        {"text": "beta.",  "start": 5.0,  "end": 6.0,  "type": "word"},
+    ])
+    with pytest.raises(SystemExit):
+        rec.recommend(
+            script_srt=srt, transcript=transcript, source=Path("fake.mp4"),
+            output=tmp_path / "plan.json",
+            monotonic_source=True,
+        )
+
+
 def test_e2e_recommend_then_render(
     rec, sde, helpers_ns, synth_av, tmp_path
 ):
