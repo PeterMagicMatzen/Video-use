@@ -1,13 +1,35 @@
-"""srt_video_editor — minimal viable version.
+"""srt_video_editor — minimal viable, learning-grade scaffold.
 
-Reads script.srt + edit_plan.json, validates that their ids match,
-prints the planned source-time range for each cue, cuts each cue's
-range out of source.mp4 into temp/clip_<id:03d>.mp4, then concatenates
-the clips in cue-id order into output/final.mp4.
+================================================================
+THIS IS NOT THE PRODUCTION ENTRY POINT. Use `python main.py` (or
+`python helpers/srt_driven_edit.py` directly) for any real work.
+================================================================
 
-Stays self-contained on purpose: no imports from helpers/, so the whole
-flow fits in one readable file. Audio fades, subtitle burn, color
-grading, etc. are NOT done here — they live in helpers/srt_driven_edit.py.
+What this script does:
+  - reads script.srt + edit_plan.json
+  - validates ids match
+  - prints the planned mapping
+  - cuts each cue out of source.mp4 to temp/clip_<id:03d>.mp4
+  - lossless-concats into output/final.mp4
+
+What it deliberately DOES NOT do (use main.py / srt_driven_edit.py
+for any of these):
+  - encoding fallback — only UTF-8 / UTF-8-with-BOM SRT is accepted;
+    GB18030 / cp936 input will crash
+  - source range bounds check — a plan that overruns the source's
+    duration will surface as a confusing ffmpeg error, not a clear
+    "id=X exceeds source duration" up front
+  - QC report — no per-clip drift, no disk-usage accounting, no
+    structured failure record
+  - overwrite protection — every run silently `-y` overwrites the
+    temp/ clips and output/final.mp4
+  - audio fades at cut points (you may hear pops on hard cuts)
+  - voice replacement, subtitle burn, color grade, HDR tone-map,
+    sync tails, segment cache, batch / per-episode discovery
+
+Self-contained on purpose: no imports from helpers/, so the entire
+flow fits in one readable file. Use this to learn the pipeline; ship
+with main.py.
 
 Usage:
     python srt_video_editor.py
@@ -287,10 +309,13 @@ def print_report(cues: list[dict], plan: list[dict]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
-            "Minimal SRT-driven editor. Reads script.srt + edit_plan.json, "
-            "validates id matching, prints the planned range table, cuts "
-            "each cue out of source.mp4 into temp/clip_<id>.mp4, then "
-            "lossless-concats the clips into output/final.mp4."
+            "MINIMAL learning-grade SRT-driven editor. NOT for production — "
+            "use `python main.py` for that. This script reads script.srt + "
+            "edit_plan.json, validates id matching, prints the planned range "
+            "table, cuts each cue out of source.mp4 into temp/clip_<id>.mp4, "
+            "then lossless-concats them into output/final.mp4. No encoding "
+            "fallback, no range-bounds check, no QC report, no overwrite "
+            "protection."
         ),
     )
     ap.add_argument("--srt", type=Path, default=Path("input/script.srt"))
@@ -299,6 +324,12 @@ def main() -> None:
     ap.add_argument("--temp-dir", type=Path, default=Path("temp"))
     ap.add_argument("--output", type=Path, default=Path("output/final.mp4"))
     args = ap.parse_args()
+
+    print(
+        "[srt_video_editor: minimal mode — UTF-8 SRT only, no range/QC "
+        "checks, temp/ + output/ will be overwritten. For production "
+        "use `python main.py`.]"
+    )
 
     for p in (args.srt, args.plan, args.source):
         if not p.is_file():
