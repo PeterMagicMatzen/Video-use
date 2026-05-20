@@ -177,6 +177,38 @@ def test_run_episodes_failure_record_includes_paths(
     assert rec["stderr_tail"] == ""
 
 
+def test_run_episodes_continues_past_corrupt_plan_json(
+    runner, helpers_ns, ffmpeg_version, synth_av, tmp_path
+):
+    """A non-SystemExit (JSONDecodeError) inside run_job must NOT abort
+    --continue-on-error. Pre-fix the loop only caught SystemExit, so a
+    malformed edit_plan.json in one ep would crash the whole batch."""
+    batch = tmp_path / "batch"
+    _make_ep(batch / "ep01", synth_av, helpers_ns)
+    # ep02: valid SRT + source, but plan.json is garbage
+    ep02 = batch / "ep02"
+    ep02.mkdir()
+    import shutil
+    shutil.copy2(synth_av, ep02 / "source.mp4")
+    helpers_ns.write_srt(ep02 / "script.srt", [(1, 0.0, 1.5, "x")])
+    (ep02 / "edit_plan.json").write_text("{ not json", encoding="utf-8")
+    # ep03 should still run
+    _make_ep(batch / "ep03", synth_av, helpers_ns)
+
+    summary = runner.run_episodes(
+        batch, ffmpeg_version=ffmpeg_version,
+        continue_on_error=True,
+    )
+    assert summary["episodes_total"] == 3
+    assert summary["ok"] == 2
+
+    failed = [r for r in summary["results"] if not r.get("ok")]
+    assert len(failed) == 1 and failed[0]["job"] == "ep02"
+    assert "JSON" in failed[0]["error"] or "json" in failed[0]["error"]
+    # ep03 (the post-bad one) must have run
+    assert (batch / "ep03" / "final.mp4").exists()
+
+
 def test_run_episodes_per_ep_voice(
     runner, helpers_ns, ffmpeg_version, synth_av, synth_voice, tmp_path
 ):

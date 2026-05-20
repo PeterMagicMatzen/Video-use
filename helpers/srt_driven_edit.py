@@ -273,8 +273,9 @@ def preflight() -> dict[str, str]:
 def probe_streams(path: Path) -> dict:
     """Probe a media file for {has_video, has_audio, duration}.
 
-    Raises SystemExit on probe failure so the caller doesn't continue
-    blindly. Result is cheap to memoize per source path.
+    Raises SystemExit on any probe failure (binary missing, bad file,
+    malformed output) so the caller doesn't continue blindly. Result
+    is cheap to memoize per source path.
     """
     try:
         r = subprocess.run(
@@ -287,11 +288,19 @@ def probe_streams(path: Path) -> dict:
             capture_output=True, text=True, check=True,
             encoding="utf-8", errors="replace",
         )
+    except FileNotFoundError:
+        raise SystemExit(
+            "ffprobe not on PATH. Install ffmpeg "
+            "(`winget install Gyan.FFmpeg` / `brew install ffmpeg`)."
+        )
     except subprocess.CalledProcessError as e:
         raise SystemExit(
             f"ffprobe failed on {path}: {(e.stderr or '')[:300]}"
         )
-    data = json.loads(r.stdout)
+    try:
+        data = json.loads(r.stdout)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"ffprobe returned malformed JSON for {path}: {e}")
     types: set[str] = set()
     for s in data.get("streams", []) or []:
         t = s.get("codec_type")
@@ -465,7 +474,17 @@ def validate_srt(cues: list[SrtCue]) -> None:
 
 def parse_plan(path: Path) -> tuple[dict[str, Path], dict[str, Path], list[PlanEntry]]:
     """Returns (sources_map, voices_map, entries). Detects Form A vs B."""
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise SystemExit(f"edit_plan unreadable: {path}: {e}")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"edit_plan is not valid JSON: {path}: "
+            f"line {e.lineno} col {e.colno}: {e.msg}"
+        )
     base = path.parent
 
     if isinstance(data, list):
@@ -1432,15 +1451,28 @@ def make_failure_record(
 def load_manifest(path: Path) -> list[dict]:
     suffix = path.suffix.lower()
     if suffix == ".json":
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise SystemExit(f"batch manifest unreadable: {path}: {e}")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise SystemExit(
+                f"batch manifest is not valid JSON: {path}: "
+                f"line {e.lineno} col {e.colno}: {e.msg}"
+            )
         if not isinstance(data, list):
             raise SystemExit("batch manifest JSON must be an array of job dicts")
         return data
     if suffix == ".csv":
         rows: list[dict] = []
-        with path.open(newline="", encoding="utf-8-sig") as f:
-            for row in csv.DictReader(f):
-                rows.append({k: v for k, v in row.items() if v != ""})
+        try:
+            with path.open(newline="", encoding="utf-8-sig") as f:
+                for row in csv.DictReader(f):
+                    rows.append({k: v for k, v in row.items() if v != ""})
+        except (OSError, csv.Error) as e:
+            raise SystemExit(f"batch manifest CSV error: {path}: {e}")
         return rows
     raise SystemExit(f"unsupported manifest format: {suffix}")
 
@@ -1553,9 +1585,9 @@ def main() -> None:
         for i, row in enumerate(rows):
             try:
                 job = job_from_dict(row, args, manifest_path.parent, i)
-            except SystemExit as e:
+            except (SystemExit, Exception) as e:
                 if args.continue_on_error:
-                    print(f"[batch {i}] skipped: {e}")
+                    print(f"[batch {i}] skipped: {type(e).__name__}: {e}")
                     results.append(make_failure_record(
                         index=i, name=row.get("name", f"row{i}"),
                         error=e, job=None, manifest_row=row,
@@ -1564,9 +1596,9 @@ def main() -> None:
                 raise
             try:
                 results.append(run_job(job, versions["ffmpeg"]))
-            except SystemExit as e:
+            except (SystemExit, Exception) as e:
                 if args.continue_on_error:
-                    print(f"[batch {i}] FAILED: {e}")
+                    print(f"[batch {i}] FAILED: {type(e).__name__}: {e}")
                     results.append(make_failure_record(
                         index=i, name=job.name, error=e, job=job,
                     ))

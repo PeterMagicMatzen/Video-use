@@ -52,7 +52,7 @@ def run_batch(helpers_ns, manifest_path, ffmpeg_version, *,
     for i, row in enumerate(rows):
         try:
             job = sde.job_from_dict(row, defaults, manifest_path.parent, i)
-        except SystemExit as e:
+        except (SystemExit, Exception) as e:
             if continue_on_error:
                 results.append(sde.make_failure_record(
                     index=i, name=row.get("name", f"row{i}"),
@@ -62,7 +62,7 @@ def run_batch(helpers_ns, manifest_path, ffmpeg_version, *,
             raise
         try:
             results.append(sde.run_job(job, ffmpeg_version))
-        except SystemExit as e:
+        except (SystemExit, Exception) as e:
             if continue_on_error:
                 results.append(sde.make_failure_record(
                     index=i, name=job.name, error=e, job=job,
@@ -266,6 +266,43 @@ def test_batch_malformed_row_failure_record(helpers_ns, ffmpeg_version, tmp_path
     assert failed["srt"] == "scripts/missing.srt"
     assert failed["plan"] is None
     assert failed["stderr_tail"] == ""
+
+
+def test_batch_continues_past_corrupt_plan_json(
+    helpers_ns, ffmpeg_version, synth_av, tmp_path
+):
+    """A row whose plan.json is malformed must NOT abort the batch under
+    --continue-on-error. JSONDecodeError used to escape the loop because
+    we only caught SystemExit; the failure record now captures it.
+    """
+    # Good row
+    helpers_ns.write_srt(tmp_path / "s_ok.srt", CUES_2)
+    helpers_ns.write_plan_form_a(tmp_path / "p_ok.json", PLAN_2)
+    # Bad plan: not valid JSON
+    helpers_ns.write_srt(tmp_path / "s_bad.srt", CUES_2)
+    (tmp_path / "p_bad.json").write_text("{ this is not json", encoding="utf-8")
+    # Another good row after the bad one — must still run
+    helpers_ns.write_srt(tmp_path / "s_ok2.srt", CUES_2)
+    helpers_ns.write_plan_form_a(tmp_path / "p_ok2.json", PLAN_2)
+
+    manifest_path = tmp_path / "jobs.json"
+    manifest_path.write_text(json.dumps([
+        {"name": "ok0",    "source": str(synth_av),
+         "srt": "s_ok.srt",   "plan": "p_ok.json"},
+        {"name": "broken", "source": str(synth_av),
+         "srt": "s_bad.srt",  "plan": "p_bad.json"},
+        {"name": "ok2",    "source": str(synth_av),
+         "srt": "s_ok2.srt",  "plan": "p_ok2.json"},
+    ]), encoding="utf-8")
+
+    results = run_batch(helpers_ns, manifest_path, ffmpeg_version,
+                        continue_on_error=True)
+    assert len(results) == 3
+    assert results[0]["ok"] is True
+    assert results[1]["ok"] is False
+    assert "JSON" in results[1]["error"] or "json" in results[1]["error"]
+    assert results[1]["plan"] and results[1]["plan"].endswith("p_bad.json")
+    assert results[2]["ok"] is True
 
 
 def test_batch_per_job_bg_volume(helpers_ns, ffmpeg_version, synth_av, tmp_path):

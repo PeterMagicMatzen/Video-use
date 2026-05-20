@@ -155,9 +155,10 @@ def run_episodes(
         try:
             qc = run_job(job, ffmpeg_version)
             results.append(qc)
-        except SystemExit as e:
+        except (SystemExit, Exception) as e:
             if continue_on_error:
-                print(f"[{i + 1}/{len(eps)}] FAILED: {e}")
+                print(f"[{i + 1}/{len(eps)}] FAILED: "
+                      f"{type(e).__name__}: {e}")
                 results.append(make_failure_record(
                     index=i, name=ep.name, error=e, job=job,
                 ))
