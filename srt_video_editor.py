@@ -1,17 +1,19 @@
 """srt_video_editor — minimal viable version.
 
 Reads script.srt + edit_plan.json, validates that their ids match,
-prints the planned source-time range for each cue, then cuts each cue's
-range out of source.mp4 into temp/clip_<id:03d>.mp4 with ffmpeg.
+prints the planned source-time range for each cue, cuts each cue's
+range out of source.mp4 into temp/clip_<id:03d>.mp4, then concatenates
+the clips in cue-id order into output/final.mp4.
 
 Stays self-contained on purpose: no imports from helpers/, so the whole
-flow fits in one readable file. Concatenation, audio fades, subtitle
-burn, etc. are NOT done here — they live in helpers/srt_driven_edit.py.
+flow fits in one readable file. Audio fades, subtitle burn, color
+grading, etc. are NOT done here — they live in helpers/srt_driven_edit.py.
 
 Usage:
     python srt_video_editor.py
     python srt_video_editor.py --srt input/script.srt --plan input/edit_plan.json \\
-                               --source input/source.mp4 --temp-dir temp/
+                               --source input/source.mp4 \\
+                               --temp-dir temp/ --output output/final.mp4
 """
 
 from __future__ import annotations
@@ -211,6 +213,57 @@ def extract_clips(
     return outputs
 
 
+def concat_clips(clip_paths: list[Path], out_path: Path) -> None:
+    """Lossless concat of pre-encoded clips via ffmpeg's concat demuxer.
+
+    The clips produced by `cut_clip` all share the same encoder params
+    (libx264, yuv420p, aac), so `-c copy` is safe and instant — no
+    re-encode. The concat list file is written next to the first clip
+    (typically `temp/_concat.txt`) and removed in `finally` so a clean
+    run leaves a tidy temp/ and a failed run doesn't leave a stale list.
+
+    Raises SystemExit with the full ffmpeg command + stderr on failure.
+    """
+    if not clip_paths:
+        raise SystemExit("concat: no clips to concatenate")
+
+    list_file = clip_paths[0].parent / "_concat.txt"
+    list_file.write_text(
+        "".join(f"file '{p.resolve().as_posix()}'\n" for p in clip_paths),
+        encoding="utf-8",
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-nostats",
+        "-f", "concat", "-safe", "0",
+        "-i", str(list_file),
+        "-c", "copy",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    try:
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+            )
+        except FileNotFoundError:
+            raise SystemExit(
+                "ffmpeg not found on PATH. Install ffmpeg "
+                "(`winget install Gyan.FFmpeg` on Windows, "
+                "`brew install ffmpeg` on macOS) and re-run."
+            )
+        if proc.returncode != 0:
+            raise SystemExit(
+                f"ffmpeg concat failed (exit {proc.returncode})\n"
+                f"--- command ---\n{' '.join(cmd)}\n"
+                f"--- stderr ---\n{proc.stderr or '(empty)'}"
+            )
+    finally:
+        list_file.unlink(missing_ok=True)
+    print(f"  concat {len(clip_paths)} clip(s) -> {out_path}")
+
+
 def print_report(cues: list[dict], plan: list[dict]) -> None:
     plan_by_id = {p["id"]: p for p in plan}
     print(f"{len(cues)} cue(s), all ids matched.")
@@ -235,15 +288,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
             "Minimal SRT-driven editor. Reads script.srt + edit_plan.json, "
-            "validates id matching, prints the planned source range table, "
-            "then cuts each cue out of source.mp4 into temp/clip_*.mp4. "
-            "No concatenation yet."
+            "validates id matching, prints the planned range table, cuts "
+            "each cue out of source.mp4 into temp/clip_<id>.mp4, then "
+            "lossless-concats the clips into output/final.mp4."
         ),
     )
     ap.add_argument("--srt", type=Path, default=Path("input/script.srt"))
     ap.add_argument("--plan", type=Path, default=Path("input/edit_plan.json"))
     ap.add_argument("--source", type=Path, default=Path("input/source.mp4"))
     ap.add_argument("--temp-dir", type=Path, default=Path("temp"))
+    ap.add_argument("--output", type=Path, default=Path("output/final.mp4"))
     args = ap.parse_args()
 
     for p in (args.srt, args.plan, args.source):
@@ -254,9 +308,12 @@ def main() -> None:
     plan = parse_plan(args.plan)
     validate_ids(cues, plan)
     print_report(cues, plan)
-    extract_clips(cues, plan, args.source, args.temp_dir)
+    clip_paths = extract_clips(cues, plan, args.source, args.temp_dir)
     print()
-    print(f"done. {len(cues)} clip(s) in {args.temp_dir}/")
+    print(f"concatenating -> {args.output}")
+    concat_clips(clip_paths, args.output)
+    print()
+    print(f"done. final video: {args.output}")
 
 
 if __name__ == "__main__":
