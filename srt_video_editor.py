@@ -63,11 +63,22 @@ def parse_ts(s: str) -> float:
 
 
 def format_ts(seconds: float) -> str:
+    """SRT-style HH:MM:SS,ms — comma separator (for log output / errors)."""
     total_ms = int(round(seconds * 1000))
     h, rem = divmod(total_ms, 3600_000)
     m, rem = divmod(rem, 60_000)
     s, ms = divmod(rem, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def format_ts_dot(seconds: float) -> str:
+    """ffmpeg-style HH:MM:SS.ms — dot separator. Used for `-ss` / `-t` args.
+
+    SRT timestamps use a comma between seconds and milliseconds; ffmpeg
+    expects a dot. The two forms refer to the same point in time but the
+    comma form is rejected by ffmpeg's parser.
+    """
+    return format_ts(seconds).replace(",", ".")
 
 
 # ---------- parsers ----------
@@ -155,25 +166,34 @@ def validate_ids(cues: list[dict], plan: list[dict]) -> None:
 # ---------- report ----------
 
 
-def cut_clip(source: Path, start: float, end: float, out_path: Path) -> None:
-    """Cut [start, end] from source to out_path, re-encoded for frame accuracy.
+def cut_clip(source: Path, start: float, cut_duration: float,
+             out_path: Path) -> None:
+    """Cut `cut_duration` seconds starting at `start` from source.
 
-    Keeps the original audio. `-ss` placed before `-i` makes ffmpeg do a
-    fast container-level seek to the nearest keyframe, then libx264
-    re-encodes from there — frame-accurate at the cost of one encode pass.
+    `-ss` placed before `-i` makes ffmpeg do a fast container-level seek
+    to the nearest keyframe, then libx264 re-encodes from there —
+    frame-accurate at the cost of one encode pass. Stream copy (`-c copy`)
+    would be faster but cuts at keyframes only, which makes downstream
+    concat / sync less predictable; we trade a few seconds of encode
+    time per clip for cleaner cut boundaries.
 
-    Raises SystemExit with the full ffmpeg command + stderr on failure so
-    the caller never has to scroll the terminal to find what went wrong.
+    Audio is mapped optionally via `-map 0:a?` so a video-only source
+    does not crash the run. Video is the first stream (`-map 0:v:0`).
+
+    Raises SystemExit with the full ffmpeg command + stderr on failure
+    so the caller never has to scroll the terminal to find what went wrong.
     """
-    duration = end - start
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-nostats",
-        "-ss", f"{start:.3f}",
+        "-ss", format_ts_dot(start),
         "-i", str(source),
-        "-t", f"{duration:.3f}",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "192k",
+        "-t", format_ts_dot(cut_duration),
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
         "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart",
         str(out_path),
     ]
@@ -204,12 +224,36 @@ def extract_clips(
 ) -> list[Path]:
     """Cut one clip per cue. Returns the list of output paths in cue-id order.
 
-    Filenames are `clip_<id:03d>.mp4`, indexed by SRT id (not position) so
-    each clip is traceable back to its cue at a glance even if ids are
-    sparse or non-consecutive.
+    Per-cue duration logic:
+      source_duration = plan.source_end - plan.source_start
+      srt_duration    = cue.end - cue.start
+
+      source_duration <= 0           -> hard error pointing at the id
+      source_duration <  srt_duration -> hard error (source is too short
+                                        to cover the SRT cue; either
+                                        extend the source range or
+                                        shorten the cue)
+      source_duration >= srt_duration -> cut exactly `srt_duration`
+                                        starting at source_start. Any
+                                        extra source tail is discarded.
+
+    Stale `clip_*.mp4` files in `temp_dir` are removed before cutting so
+    a previous failed run with sparser ids doesn't leave misleading
+    leftovers next to the new clips. The `_concat.txt` from a future
+    concat step is NOT touched here — concat owns its own list file.
+
+    Filenames are `clip_<id:03d>.mp4`, indexed by SRT id (not position).
     """
     plan_by_id = {p["id"]: p for p in plan}
     temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pre-clean stale clip files. Only the clip_*.mp4 pattern so user-
+    # created neighbours (notes, recordings, etc.) are left alone.
+    stale = sorted(temp_dir.glob("clip_*.mp4"))
+    if stale:
+        print(f"clearing {len(stale)} stale clip(s) from {temp_dir}/")
+        for p in stale:
+            p.unlink()
 
     print()
     print(f"cutting {len(cues)} clip(s) -> {temp_dir}/")
@@ -218,19 +262,35 @@ def extract_clips(
         cid = cue["id"]
         p = plan_by_id[cid]
         start = p["source_start"]
-        end = p["source_end"]
-        duration = end - start
-        if duration <= 0:
+        source_duration = p["source_end"] - start
+        srt_duration = cue["end"] - cue["start"]
+
+        if source_duration <= 0:
             raise SystemExit(
-                f"plan id={cid}: source_end {format_ts(end)} <= "
-                f"source_start {format_ts(start)} (duration {duration:.3f}s)"
+                f"plan id={cid}: source_end {format_ts(p['source_end'])} <= "
+                f"source_start {format_ts(start)} "
+                f"(source_duration {source_duration:.3f}s)"
             )
+        if source_duration < srt_duration - 1e-6:
+            raise SystemExit(
+                f"plan id={cid}: source range is shorter than SRT cue. "
+                f"source_duration={source_duration:.3f}s, "
+                f"srt_duration={srt_duration:.3f}s. "
+                f"Extend the source range or shorten the SRT cue."
+            )
+        # source_duration >= srt_duration: cut exactly srt_duration
+        cut_duration = srt_duration
+
         out_path = temp_dir / f"clip_{cid:03d}.mp4"
+        text_preview = cue["text"].replace("\n", " ").strip()
+        if len(text_preview) > 60:
+            text_preview = text_preview[:57] + "..."
         print(
-            f"  id={cid:>3}  {format_ts(start)} -> {format_ts(end)}  "
-            f"({duration:.3f}s)  -> {out_path}"
+            f"  id={cid:>3}  src@{format_ts(start)}  "
+            f"cut={cut_duration:.3f}s  -> {out_path}\n"
+            f"        text: {text_preview!r}"
         )
-        cut_clip(source, start, end, out_path)
+        cut_clip(source, start, cut_duration, out_path)
         outputs.append(out_path)
     return outputs
 
