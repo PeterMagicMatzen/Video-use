@@ -32,7 +32,8 @@ DEFAULT_PLAN = [
 
 def make_job(helpers_ns, srt_path, plan_path, tmp_path, *,
              source=None, voice=None, bg_volume=0.0,
-             style="auto", no_overwrite=False, output=None):
+             style="auto", no_overwrite=False, output=None,
+             mode="full"):
     sde = helpers_ns.sde
     return sde.Job(
         source=source,
@@ -50,6 +51,7 @@ def make_job(helpers_ns, srt_path, plan_path, tmp_path, *,
         no_cache=False,
         keep_intermediates=False,
         no_overwrite=no_overwrite,
+        mode=mode,
     )
 
 
@@ -334,6 +336,87 @@ def test_global_voice_cache_independence(
     assert all(s["cached"] is True for s in qc2["segments"]), \
         "second run with global voice should hit segment cache — voice is " \
         "mixed in the final pass, not baked into segments"
+
+
+def test_extract_mode_stops_after_clips(
+    helpers_ns, ffmpeg_version, synth_av, tmp_path
+):
+    """--mode extract must produce per-cue clips and NOT a concat'd final.mp4."""
+    srt = tmp_path / "script.srt"
+    plan = tmp_path / "plan.json"
+    helpers_ns.write_srt(srt, DEFAULT_CUES)
+    helpers_ns.write_plan_form_a(plan, DEFAULT_PLAN)
+
+    job = make_job(helpers_ns, srt, plan, tmp_path,
+                   source=synth_av, mode="extract")
+    qc = helpers_ns.sde.run_job(job, ffmpeg_version)
+
+    # Extract-mode result shape differs from the QC report
+    assert qc["ok"] is True
+    assert qc["mode"] == "extract"
+    assert qc["clip_count"] == 3
+    extracted_dir = Path(qc["extracted_dir"])
+    assert extracted_dir.is_dir()
+
+    # Clips renamed to clip_<id:03d>.mp4 (matches srt_video_editor convention)
+    for cid in (1, 2, 3):
+        clip = extracted_dir / f"clip_{cid:03d}.mp4"
+        assert clip.is_file(), f"missing extracted clip: {clip}"
+        # Each clip should match its cue duration within encoder rounding
+        actual = helpers_ns.sde.probe_duration(clip)
+        expected = next(c for c in DEFAULT_CUES if c[0] == cid)
+        expected_dur = expected[2] - expected[1]
+        assert abs(actual - expected_dur) < 0.25, \
+            f"clip {cid}: actual {actual}s vs expected {expected_dur}s"
+
+    # And NO final.mp4 was produced — extract mode stopped early
+    assert not (tmp_path / "out.mp4").exists()
+
+
+def test_extract_mode_skips_gap_clips(
+    helpers_ns, ffmpeg_version, synth_av, tmp_path
+):
+    """In extract mode, the synthetic black+silence gap clips are not made —
+    only real source extractions land in extracted_clips_/."""
+    srt = tmp_path / "script.srt"
+    plan = tmp_path / "plan.json"
+    # Cues with a 1.5s gap between id=2 and id=3 (final_end=4.5, final_start=6.0)
+    helpers_ns.write_srt(srt, DEFAULT_CUES)
+    helpers_ns.write_plan_form_a(plan, DEFAULT_PLAN)
+
+    job = make_job(helpers_ns, srt, plan, tmp_path,
+                   source=synth_av, mode="extract")
+    qc = helpers_ns.sde.run_job(job, ffmpeg_version)
+    extracted_dir = Path(qc["extracted_dir"])
+    # Only 3 clips (one per cue) — no gap_*.mp4 sneaks in
+    files = sorted(p.name for p in extracted_dir.iterdir())
+    assert files == ["clip_001.mp4", "clip_002.mp4", "clip_003.mp4"]
+
+
+def test_extract_mode_cleans_stale_clips(
+    helpers_ns, ffmpeg_version, synth_av, tmp_path
+):
+    """A previous extract-mode run's stale clips must be removed before this
+    run writes its own. Otherwise leftover clip_999.mp4 would pollute the dir.
+    """
+    srt = tmp_path / "script.srt"
+    plan = tmp_path / "plan.json"
+    helpers_ns.write_srt(srt, DEFAULT_CUES)
+    helpers_ns.write_plan_form_a(plan, DEFAULT_PLAN)
+
+    job = make_job(helpers_ns, srt, plan, tmp_path,
+                   source=synth_av, mode="extract")
+    qc1 = helpers_ns.sde.run_job(job, ffmpeg_version)
+    extracted_dir = Path(qc1["extracted_dir"])
+
+    # Plant a stale clip + an unrelated note file
+    (extracted_dir / "clip_998.mp4").write_bytes(b"stale")
+    (extracted_dir / "notes.txt").write_text("user notes", encoding="utf-8")
+
+    qc2 = helpers_ns.sde.run_job(job, ffmpeg_version)
+    files = sorted(p.name for p in Path(qc2["extracted_dir"]).iterdir())
+    assert "clip_998.mp4" not in files, "stale clip should have been removed"
+    assert "notes.txt" in files, "non-clip user files must be preserved"
 
 
 def test_gap_inserted_in_output(helpers_ns, ffmpeg_version, synth_av, tmp_path):

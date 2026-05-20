@@ -209,6 +209,33 @@ def test_run_episodes_continues_past_corrupt_plan_json(
     assert (batch / "ep03" / "final.mp4").exists()
 
 
+def test_run_episodes_extract_mode(
+    runner, helpers_ns, ffmpeg_version, synth_av, tmp_path
+):
+    """--mode extract across multiple eps: each ep produces clip_*.mp4 in its
+    own edit/extracted_clips_<ep>/ and NOT a final.mp4."""
+    batch = tmp_path / "batch"
+    for name in ("ep01", "ep02"):
+        _make_ep(batch / name, synth_av, helpers_ns)
+
+    summary = runner.run_episodes(
+        batch, ffmpeg_version=ffmpeg_version, mode="extract",
+    )
+
+    assert summary["episodes_total"] == 2
+    assert summary["ok"] == 2
+    for r in summary["results"]:
+        assert r["mode"] == "extract"
+        assert r["clip_count"] == 2  # CUES_2 has 2 cues
+        extracted_dir = Path(r["extracted_dir"])
+        assert extracted_dir.is_dir()
+        assert (extracted_dir / "clip_001.mp4").exists()
+        assert (extracted_dir / "clip_002.mp4").exists()
+    # No final.mp4 in any ep dir
+    for name in ("ep01", "ep02"):
+        assert not (batch / name / "final.mp4").exists()
+
+
 def test_run_episodes_per_ep_voice(
     runner, helpers_ns, ffmpeg_version, synth_av, synth_voice, tmp_path
 ):

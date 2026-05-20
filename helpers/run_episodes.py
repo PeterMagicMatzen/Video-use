@@ -109,6 +109,7 @@ def _make_job(ep: EpisodeJob, opts: dict) -> Job:
         no_cache=opts["no_cache"],
         keep_intermediates=opts["keep_intermediates"],
         no_overwrite=opts["no_overwrite"],
+        mode=opts.get("mode", "full"),
     )
 
 
@@ -126,6 +127,7 @@ def run_episodes(
     no_overwrite: bool = False,
     keep_intermediates: bool = False,
     continue_on_error: bool = False,
+    mode: str = "full",
 ) -> dict:
     """Discover + run every episode under `root`. Returns a summary dict and
     also writes it to `<root>/run_episodes_summary.json`."""
@@ -145,6 +147,7 @@ def run_episodes(
         "no_cache": no_cache,
         "no_overwrite": no_overwrite,
         "keep_intermediates": keep_intermediates,
+        "mode": mode,
     }
 
     results: list[dict] = []
@@ -208,6 +211,13 @@ def main() -> None:
     ap.add_argument("--keep-intermediates", action="store_true")
     ap.add_argument("--continue-on-error", action="store_true",
                     help="skip episodes that fail instead of aborting")
+    ap.add_argument(
+        "--mode", choices=["full", "extract"], default="full",
+        help="'full' (default) runs the complete pipeline per episode. "
+             "'extract' stops after segment extraction and saves clips "
+             "under each ep's edit/ dir; gap clips, voice mixing, "
+             "subtitle burn, and QC report are skipped.",
+    )
     args = ap.parse_args()
 
     versions = preflight()
@@ -226,6 +236,7 @@ def main() -> None:
         no_overwrite=args.no_overwrite,
         keep_intermediates=args.keep_intermediates,
         continue_on_error=args.continue_on_error,
+        mode=args.mode,
     )
     # Exit nonzero if any episode failed (even with --continue-on-error,
     # the caller probably wants to know).

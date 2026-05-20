@@ -1194,6 +1194,7 @@ class Job:
     no_cache: bool
     keep_intermediates: bool
     no_overwrite: bool = False
+    mode: str = "full"          # "full" (default) | "extract" (stop after segments)
 
 
 def run_job(job: Job, ffmpeg_version: str) -> dict:
@@ -1284,13 +1285,16 @@ def run_job(job: Job, ffmpeg_version: str) -> dict:
         edit_dir / f"final_srt_driven_{safe_ascii_name(job.name)}.mp4"
     )
 
-    if out_path.exists():
+    # Output-overwrite check only matters in modes that actually produce
+    # final output. Extract mode stops before any out_path is written, so
+    # checking it would produce spurious warnings about an unrelated file.
+    if job.mode == "full" and out_path.exists():
         if job.no_overwrite:
             raise SystemExit(f"output exists and --no-overwrite set: {out_path}")
         print(f"  WARNING: overwriting existing output: {out_path}")
 
     style_resolved = resolve_style(job.style, cues)
-    print(f"  style: {job.style} ({len(cues)} cues, cjk={has_cjk(cues)})")
+    print(f"  style: {job.style} ({len(cues)} cues, cjk={has_cjk(cues)})  mode={job.mode}")
 
     # All intermediates live in a safe-ASCII temp dir under tempfile.gettempdir().
     # Wiped at start so a previous crashed run cannot pollute. Wiped at end
@@ -1319,7 +1323,10 @@ def run_job(job: Job, ffmpeg_version: str) -> dict:
 
         print(f"\n  extracting {len(segments)} segments  cache={'off' if job.no_cache else 'on'}  voice={'per-seg' if any_voice else 'none'}")
         for i, seg in enumerate(segments):
-            if seg.leading_gap > 0.001:
+            # Gap clips are a concat-time concept (synthetic black + silence
+            # bridging non-contiguous SRT cues). Extract mode emits only the
+            # real source segments, so skip gap clips entirely there.
+            if job.mode != "extract" and seg.leading_gap > 0.001:
                 gap_path = clips_dir / f"gap_{i:02d}_{seg.leading_gap:.3f}.mp4"
                 if not gap_path.exists():
                     make_gap_clip(seg.leading_gap, portrait, gap_path)
@@ -1354,6 +1361,44 @@ def run_job(job: Job, ffmpeg_version: str) -> dict:
 
             clip_paths.append(seg_path)
             seg_clip_info.append({"clip_path": str(seg_path), "cached": cached_hit})
+
+        # ---- Extract mode: copy clips to a persistent location and stop ----
+        if job.mode == "extract":
+            extracted_dir = edit_dir / f"extracted_clips_{safe_ascii_name(job.name)}"
+            extracted_dir.mkdir(parents=True, exist_ok=True)
+            # Wipe stale clips from a prior run so the dir reflects only this
+            # run's segments — same pattern as srt_video_editor.py.
+            for stale in extracted_dir.glob("clip_*.mp4"):
+                stale.unlink()
+            copied: list[dict] = []
+            for seg, info in zip(segments, seg_clip_info):
+                src = Path(info["clip_path"])
+                if not src.exists():
+                    continue
+                dst = extracted_dir / f"clip_{seg.id:03d}.mp4"
+                shutil.copy2(src, dst)
+                copied.append({
+                    "id": seg.id,
+                    "filename": dst.name,
+                    "expected_duration_s": round(seg.duration, 3),
+                    "cached_from_prev_run": info["cached"],
+                })
+            print(f"\n=== extract mode: stopping after segment extraction ===")
+            print(f"  {len(copied)} clip(s) saved to: {extracted_dir}/")
+            for c in copied:
+                print(f"    {c['filename']:<24} "
+                      f"({c['expected_duration_s']:.3f}s)"
+                      + ("  [cache hit]" if c["cached_from_prev_run"] else ""))
+            return {
+                "job": job.name,
+                "ok": True,
+                "mode": "extract",
+                "extracted_dir": str(extracted_dir),
+                "clip_count": len(copied),
+                "segments": copied,
+                "elapsed_s": round(time.time() - t0, 2),
+            }
+        # ---- Full mode continues to concat + compose ----
 
         base_path = work_dir / "base.mp4"
         concat_clips(clip_paths, base_path, work_dir)
@@ -1518,6 +1563,13 @@ def job_from_dict(d: dict, defaults: argparse.Namespace, manifest_dir: Path,
             manifest_dir / f"final_srt_driven_{safe_ascii_name(job_name)}_{idx:02d}.mp4"
         )
 
+    row_mode = _str("mode", getattr(defaults, "mode", "full"))
+    if row_mode not in ("full", "extract"):
+        raise SystemExit(
+            f"manifest row {idx}: invalid mode {row_mode!r}; "
+            "expected 'full' or 'extract'"
+        )
+
     return Job(
         source=_path("source"),
         srt=srt_path,
@@ -1534,6 +1586,7 @@ def job_from_dict(d: dict, defaults: argparse.Namespace, manifest_dir: Path,
         no_cache=_bool("no_cache", defaults.no_cache),
         keep_intermediates=_bool("keep_intermediates", defaults.keep_intermediates),
         no_overwrite=_bool("no_overwrite", defaults.no_overwrite),
+        mode=row_mode,
     )
 
 
@@ -1564,6 +1617,14 @@ def main() -> None:
     ap.add_argument("--fontsdir", type=Path, default=None,
                     help="extra fonts directory passed to libass.")
     ap.add_argument("-o", "--output", type=Path, default=None)
+    ap.add_argument(
+        "--mode", choices=["full", "extract"], default="full",
+        help="'full' (default) runs extract -> concat -> subtitle burn. "
+             "'extract' stops after segment extraction and saves per-cue "
+             "clips to <edit_dir>/extracted_clips_<job>/clip_<id>.mp4; "
+             "gap clips, voice mixing, subtitle burn, and QC report are "
+             "skipped.",
+    )
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--no-overwrite", action="store_true",
                     help="refuse to run if output file already exists.")
@@ -1634,6 +1695,7 @@ def main() -> None:
         no_cache=args.no_cache,
         keep_intermediates=args.keep_intermediates,
         no_overwrite=args.no_overwrite,
+        mode=args.mode,
     )
     run_job(job, versions["ffmpeg"])
 
