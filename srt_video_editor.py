@@ -89,6 +89,10 @@ def parse_srt(path: Path) -> list[dict]:
 
     Tolerates UTF-8 with or without BOM, CRLF / LF line endings, and
     SRT cue settings ('position:90% align:start') trailing the time line.
+
+    Per-cue duration is validated here: `end <= start` is rejected with
+    an id-pinned error so the downstream ffmpeg call never sees a
+    non-positive `-t` argument.
     """
     raw = path.read_text(encoding="utf-8-sig")
     cues: list[dict] = []
@@ -105,6 +109,12 @@ def parse_srt(path: Path) -> list[dict]:
         left, right = lines[1].split("-->", 1)
         start = parse_ts(left.strip().split()[-1])
         end = parse_ts(right.strip().split()[0])
+        if end <= start:
+            raise SystemExit(
+                f"SRT id={cid}: end {format_ts(end)} <= start "
+                f"{format_ts(start)} (srt_duration {end - start:.3f}s). "
+                f"Fix the timestamp in {path}."
+            )
         text = "\n".join(lines[2:])
         cues.append({"id": cid, "start": start, "end": end, "text": text})
     if not cues:
@@ -115,8 +125,20 @@ def parse_srt(path: Path) -> list[dict]:
 def parse_plan(path: Path) -> list[dict]:
     """Return a list of {id, source_start, source_end}. Only Form A is
     accepted here (a flat JSON array); Form B is out of scope for the
-    minimal version."""
-    data = json.loads(path.read_text(encoding="utf-8"))
+    minimal version.
+
+    JSON syntax errors are reported as a SystemExit with the file path
+    plus the offending line / column / message, rather than as a bare
+    JSONDecodeError traceback.
+    """
+    raw = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"edit_plan is not valid JSON: {path}: "
+            f"line {e.lineno} col {e.colno}: {e.msg}"
+        )
     if not isinstance(data, list):
         raise SystemExit(
             "edit_plan.json must be a JSON array of "
