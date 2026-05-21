@@ -188,6 +188,34 @@ def validate_ids(cues: list[dict], plan: list[dict]) -> None:
 # ---------- report ----------
 
 
+def probe_clip_duration(path: Path) -> float | None:
+    """Return the duration of `path` in seconds via ffprobe.
+
+    Returns None if ffprobe is missing or the file is unreadable —
+    verification is informational, so probe failures should not abort
+    the run after a successful extraction.
+    """
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+    except FileNotFoundError:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return float(proc.stdout.strip())
+    except ValueError:
+        return None
+
+
 def cut_clip(source: Path, start: float, cut_duration: float,
              out_path: Path) -> None:
     """Cut `cut_duration` seconds starting at `start` from source.
@@ -280,6 +308,7 @@ def extract_clips(
     print()
     print(f"cutting {len(cues)} clip(s) -> {temp_dir}/")
     outputs: list[Path] = []
+    targets: list[float] = []  # parallel to outputs — used by post-verify pass
     for cue in sorted(cues, key=lambda c: c["id"]):
         cid = cue["id"]
         p = plan_by_id[cid]
@@ -314,6 +343,22 @@ def extract_clips(
         )
         cut_clip(source, start, cut_duration, out_path)
         outputs.append(out_path)
+        targets.append(cut_duration)
+
+    # ---- ffprobe verification ----
+    # Container duration can drift a few hundredths of a second from the
+    # target after re-encoding (libx264 GOP / first-keyframe boundary).
+    # Print the actual vs target side by side so the user can spot a
+    # clip that's wildly off — e.g. ffmpeg silently truncated to 0s.
+    print()
+    print(f"verifying {len(outputs)} clip(s) with ffprobe:")
+    for out_path, target in zip(outputs, targets):
+        actual = probe_clip_duration(out_path)
+        if actual is None:
+            print(f"  {out_path.name}: (probe failed)，target: {target:.2f}s")
+        else:
+            print(f"  {out_path.name}: {actual:.2f}s，target: {target:.2f}s")
+
     return outputs
 
 
