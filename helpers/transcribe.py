@@ -150,6 +150,15 @@ def call_dashscope(
         )
 
     dashscope.api_key = api_key
+    # Pin to the Mainland China endpoints explicitly. Both URLs are the SDK
+    # defaults, but stale DASHSCOPE_HTTP_BASE_URL / DASHSCOPE_WEBSOCKET_BASE_URL
+    # env vars (left over from an international account) would otherwise route
+    # us to the wrong region and produce a misleading 401 from the intl host
+    # even when the key is valid on the domestic side.
+    dashscope.base_http_api_url = "https://dashscope.aliyuncs.com/api/v1"
+    dashscope.base_websocket_api_url = (
+        "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+    )
 
     language_hints = [language] if language else None
 
