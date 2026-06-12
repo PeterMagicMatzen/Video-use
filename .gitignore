@@ -58,3 +58,27 @@ master.srt
 takes_packed.md
 edl.json
 project.md
+
+# Raw footage, renders, music, SFX — never commit large media binaries
+*.mp4
+*.mov
+*.MOV
+*.mkv
+*.avi
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+
+# Media/working folders dropped into the repo root
+background/
+musica/
+luts/
+presets/
+WHOOSH/
+SFX Reels/
+CONTABILIZEI/
+drive-download-*/
+#03 Sound Effects*/
+\#03 Sound Effects*/
