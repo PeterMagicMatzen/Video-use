@@ -73,6 +73,7 @@ Helpers (`helpers/transcribe.py`, `helpers/render.py`, etc.) live alongside this
 - **`transcribe_batch.py <videos_dir>`** — 4-worker parallel transcription. Use for multi-take.
 - **`pack_transcripts.py --edit-dir <dir>`** — `transcripts/*.json` → `takes_packed.md` (phrase-level, break on silence ≥ 0.5s).
 - **`timeline_view.py <video> <start> <end>`** — filmstrip + waveform PNG. On-demand visual drill-down. **Not a scan tool** — use it at decision points, not constantly.
+- **`sync_audio.py --config <sync.json>`** — precise multicam audio sync via GCC-PHAT. Use for any project with more than one camera/microphone. Cross-correlates 10s+ audio windows around clap markers (or any shared transient) with phase-transform whitening — sub-frame accurate even between dissimilar mics with different frequency response or room reverb. **Always reach for this on multicam — never eyeball offsets from Scribe's `(claps)` audio_event timestamps**, those drift 200–500ms. See the file header for config shape. Outputs `sync_offsets.json` with `final` offsets per target camera; if two events disagree by > 50ms it flags clap-pattern aliasing for review.
 - **`render.py <edl.json> -o <out>`** — per-segment extract → concat → overlays (PTS-shifted) → subtitles LAST. `--preview` for 720p fast. `--build-subtitles` to generate master.srt inline.
 - **`grade.py <in> -o <out>`** — ffmpeg filter chain grade. Presets + `--filter '<raw>'` for custom.
 
