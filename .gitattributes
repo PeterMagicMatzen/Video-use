@@ -1,0 +1,3 @@
+# Force LF on markdown so a Windows editor can't re-flip these to CRLF
+# and produce unreviewable whole-file diffs (see SKILL.md CRLF incident).
+*.md text eol=lf
