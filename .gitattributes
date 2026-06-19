@@ -1,3 +1,9 @@
 # Force LF on markdown so a Windows editor can't re-flip these to CRLF
 # and produce unreviewable whole-file diffs (see SKILL.md CRLF incident).
 *.md text eol=lf
+
+# Executable source: CRLF in a shell script breaks execution on Linux/Codex,
+# which the README markets support for. Keep these LF everywhere.
+*.py text eol=lf
+*.sh text eol=lf
+*.toml text eol=lf
