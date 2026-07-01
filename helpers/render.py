@@ -26,6 +26,7 @@ import json
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 try:
@@ -55,6 +56,43 @@ SUB_FORCE_STYLE = (
     "Alignment=2,MarginV=90"
 )
 
+# -------- ffmpeg binary detection -------------------------------------------
+# Some ffmpeg builds (e.g. plain brew ffmpeg) lack libass, so the `subtitles`
+# filter is unavailable. Detect a libass-capable binary by probing -filters
+# instead of hardcoding install paths.
+import os as _os
+import shutil as _shutil
+
+
+def _has_subtitles_filter(binary: str) -> bool:
+    try:
+        out = subprocess.run(
+            [binary, "-hide_banner", "-filters"],
+            capture_output=True, text=True, timeout=15,
+        )
+        return " subtitles " in out.stdout
+    except Exception:
+        return False
+
+
+def _detect_ffmpeg() -> tuple[str, str]:
+    """Return (ffmpeg, ffmpeg_for_subtitles)."""
+    default = _shutil.which("ffmpeg") or "ffmpeg"
+    if _has_subtitles_filter(default):
+        return default, default
+    # Known alternate locations for full builds (Apple Silicon / Intel brew).
+    for candidate in (
+        "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+        "/usr/local/opt/ffmpeg-full/bin/ffmpeg",
+    ):
+        if _os.path.exists(candidate) and _has_subtitles_filter(candidate):
+            return default, candidate
+    return default, default
+
+
+FFMPEG, FFMPEG_SUBS = _detect_ffmpeg()
+
+
 # -------- Helpers ------------------------------------------------------------
 
 
@@ -62,6 +100,16 @@ def run(cmd: list[str], quiet: bool = False) -> None:
     if not quiet:
         print(f"  $ {' '.join(str(c) for c in cmd[:6])}{' …' if len(cmd) > 6 else ''}")
     subprocess.run(cmd, check=True)
+
+
+def run_ffmpeg(cmd: list[str]) -> None:
+    """Run an ffmpeg command quietly, but surface stderr if it fails."""
+    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode(errors="replace") if proc.stderr else ""
+        tail = "\n".join(stderr.strip().splitlines()[-15:])
+        print(f"\nffmpeg failed (exit {proc.returncode}):\n  $ {' '.join(str(c) for c in cmd)}\n{tail}", file=sys.stderr)
+        raise subprocess.CalledProcessError(proc.returncode, cmd, stderr=stderr)
 
 
 def resolve_grade_filter(grade_field: str | None) -> str:
@@ -116,34 +164,52 @@ TONEMAP_CHAIN = (
     "format=yuv420p"
 )
 
+# One ffprobe per source — segments usually share sources, so cache the result.
+_PROBE_CACHE: dict[str, dict] = {}
 
-def is_hdr_source(video: Path) -> bool:
-    """Return True if the source uses a PQ or HLG transfer function."""
+
+def probe_source(video: Path) -> dict:
+    """Return {'hdr': bool, 'portrait': bool, 'fps': float|None} for a source."""
+    key = str(video.resolve())
+    if key in _PROBE_CACHE:
+        return _PROBE_CACHE[key]
+    info = {"hdr": False, "portrait": False, "fps": None}
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=color_transfer",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+             "-show_entries", "stream=width,height,color_transfer,r_frame_rate",
+             "-of", "json", str(video)],
             capture_output=True, text=True, check=True,
         )
-        return out.stdout.strip() in HDR_TRANSFERS
-    except subprocess.CalledProcessError:
-        return False
-
-
-def is_portrait_source(video: Path) -> bool:
-    """Return True if the video's height > width (portrait / vertical)."""
-    try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "csv=p=0", str(video)],
-            capture_output=True, text=True, check=True,
-        )
-        w, h = map(int, out.stdout.strip().split(","))
-        return h > w
+        stream = json.loads(out.stdout)["streams"][0]
+        info["hdr"] = stream.get("color_transfer", "") in HDR_TRANSFERS
+        w, h = int(stream.get("width", 0)), int(stream.get("height", 0))
+        info["portrait"] = h > w
+        rate = stream.get("r_frame_rate", "")
+        if "/" in rate:
+            num, den = rate.split("/")
+            if float(den) > 0:
+                info["fps"] = float(num) / float(den)
     except Exception:
-        return False
+        pass
+    _PROBE_CACHE[key] = info
+    return info
+
+
+def project_fps(edl: dict, edit_dir: Path) -> float:
+    """Pick one fps for the whole render: the first source's native rate.
+
+    Forcing a fixed 24 on 30/60fps footage drops/duplicates frames; matching
+    the source keeps motion smooth. All segments share one rate so the
+    lossless concat stays valid.
+    """
+    for r in edl.get("ranges", []):
+        src = resolve_path(edl["sources"][r["source"]], edit_dir)
+        fps = probe_source(src).get("fps")
+        if fps:
+            # Cap at 60 to keep encode times sane on slo-mo sources.
+            return min(round(fps, 3), 60.0)
+    return 24.0
 
 
 # -------- Per-segment extraction (Rule 2 + Rule 3) --------------------------
@@ -157,6 +223,7 @@ def extract_segment(
     out_path: Path,
     preview: bool = False,
     draft: bool = False,
+    fps: float = 24.0,
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -170,14 +237,15 @@ def extract_segment(
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    portrait = is_portrait_source(source)
+    info = probe_source(source)
+    portrait = info["portrait"]
     if draft:
         scale = "scale=-2:1280" if portrait else "scale=1280:-2"
     else:
         scale = "scale=-2:1920" if portrait else "scale=1920:-2"
 
     vf_parts: list[str] = []
-    if is_hdr_source(source):
+    if info["hdr"]:
         vf_parts.append(TONEMAP_CHAIN)
     vf_parts.append(scale)
     if grade_filter:
@@ -196,19 +264,19 @@ def extract_segment(
         preset, crf = "fast", "20"
 
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-ss", f"{seg_start:.3f}",
         "-i", str(source),
         "-t", f"{duration:.3f}",
         "-vf", vf,
         "-af", af,
         "-c:v", "libx264", "-preset", preset, "-crf", crf,
-        "-pix_fmt", "yuv420p", "-r", "24",
+        "-pix_fmt", "yuv420p", "-r", f"{fps:g}",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
         "-movflags", "+faststart",
         str(out_path),
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run_ffmpeg(cmd)
 
 
 def extract_all_segments(
@@ -234,10 +302,12 @@ def extract_all_segments(
     ranges = edl["ranges"]
     sources = edl["sources"]
 
-    seg_paths: list[Path] = []
-    print(f"extracting {len(ranges)} segment(s) → {clips_dir.name}/")
+    fps = project_fps(edl, edit_dir)
+    print(f"extracting {len(ranges)} segment(s) → {clips_dir.name}/  ({fps:g} fps)")
     if is_auto:
         print("  (auto-grade per segment: analyzing each range)")
+
+    jobs: list[tuple[int, Path, float, float, str, Path]] = []
     for i, r in enumerate(ranges):
         src_name = r["source"]
         src_path = resolve_path(sources[src_name], edit_dir)
@@ -255,23 +325,60 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft)
-        seg_paths.append(out_path)
+        jobs.append((i, src_path, start, duration, seg_filter, out_path))
 
-    return seg_paths
+    # Encode segments in parallel — each is an independent ffmpeg process.
+    workers = min(4, max(1, len(jobs)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                extract_segment, src, start, dur, flt, out,
+                preview=preview, draft=draft, fps=fps,
+            ): i
+            for i, src, start, dur, flt, out in jobs
+        }
+        for fut in as_completed(futures):
+            fut.result()  # re-raise the first failure
+
+    return [job[5] for job in jobs]
 
 
 # -------- Lossless concat ----------------------------------------------------
 
 
+def _segment_signature(path: Path) -> tuple:
+    """Resolution of an encoded segment — must be uniform for -c copy concat."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height",
+             "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, check=True,
+        )
+        return tuple(out.stdout.strip().split(","))
+    except Exception:
+        return ("?",)
+
+
 def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -> None:
     """Lossless concat via the concat demuxer. No re-encode."""
+    # -c copy silently produces a broken file if segments differ in
+    # resolution/orientation (e.g. portrait + landscape sources in one EDL).
+    sigs = {p.name: _segment_signature(p) for p in segment_paths}
+    if len(set(sigs.values())) > 1:
+        detail = "\n".join(f"  {name}: {'x'.join(sig)}" for name, sig in sigs.items())
+        sys.exit(
+            "error: segments have mismatched resolutions — lossless concat would "
+            f"produce a corrupt file:\n{detail}\n"
+            "Reframe sources to a common orientation (helpers/reframe.py) first."
+        )
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     concat_list = edit_dir / "_concat.txt"
     concat_list.write_text("".join(f"file '{p.resolve()}'\n" for p in segment_paths))
 
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-f", "concat", "-safe", "0",
         "-i", str(concat_list),
         "-c", "copy",
@@ -279,7 +386,7 @@ def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -
         str(out_path),
     ]
     print(f"concat → {out_path.name}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run_ffmpeg(cmd)
     concat_list.unlink(missing_ok=True)
 
 
@@ -404,7 +511,7 @@ def measure_loudness(video_path: Path) -> dict[str, str] | None:
         f"loudnorm=I={LOUDNORM_I}:TP={LOUDNORM_TP}:LRA={LOUDNORM_LRA}:print_format=json"
     )
     cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-nostats",
+        FFMPEG, "-y", "-hide_banner", "-nostats",
         "-i", str(video_path),
         "-af", filter_str,
         "-vn", "-f", "null", "-",
@@ -445,7 +552,7 @@ def apply_loudnorm_two_pass(
         # One-pass approximation — faster, slightly less accurate.
         filter_str = f"loudnorm=I={LOUDNORM_I}:TP={LOUDNORM_TP}:LRA={LOUDNORM_LRA}"
         cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-nostats",
+            FFMPEG, "-y", "-hide_banner", "-nostats",
             "-i", str(input_path),
             "-c:v", "copy",
             "-af", filter_str,
@@ -454,7 +561,7 @@ def apply_loudnorm_two_pass(
             str(output_path),
         ]
         print(f"  loudnorm (1-pass preview) → {output_path.name}")
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        run_ffmpeg(cmd)
         return True
 
     # Full two-pass
@@ -477,7 +584,7 @@ def apply_loudnorm_two_pass(
         f":linear=true"
     )
     cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-nostats",
+        FFMPEG, "-y", "-hide_banner", "-nostats",
         "-i", str(input_path),
         "-c:v", "copy",
         "-af", filter_str,
@@ -486,7 +593,7 @@ def apply_loudnorm_two_pass(
         str(output_path),
     ]
     print(f"  loudnorm pass 2: normalizing → {output_path.name}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run_ffmpeg(cmd)
     return True
 
 
@@ -509,7 +616,7 @@ def build_final_composite(
 
     if not has_overlays and not has_subs:
         # Nothing to do — just rename/copy base to final name
-        run(["ffmpeg", "-y", "-i", str(base_path), "-c", "copy", str(out_path)], quiet=True)
+        run([FFMPEG, "-y", "-i", str(base_path), "-c", "copy", str(out_path)], quiet=True)
         return
 
     inputs: list[str] = ["-i", str(base_path)]
@@ -537,7 +644,15 @@ def build_final_composite(
 
     # Subtitles LAST — Rule 1
     if has_subs:
-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
+        # Filtergraph escaping: the surrounding single quotes protect [ ] , ;
+        # at the graph level; ':' still needs escaping at the filter-arg level,
+        # and a literal ' must be emitted as '\'' (close, escaped quote, reopen).
+        subs_abs = (
+            str(subtitles_path.resolve())
+            .replace("\\", "/")
+            .replace(":", r"\:")
+            .replace("'", r"'\''")
+        )
         filter_parts.append(
             f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
         )
@@ -552,12 +667,14 @@ def build_final_composite(
 
     filter_complex = ";".join(filter_parts)
 
+    # Use FFMPEG_SUBS if subtitles are being burned (requires libass)
+    _ffmpeg_bin = FFMPEG_SUBS if has_subs else FFMPEG
     cmd = [
-        "ffmpeg", "-y",
+        _ffmpeg_bin, "-y",
         *inputs,
         "-filter_complex", filter_complex,
         "-map", out_label,
-        "-map", "0:a",
+        "-map", "0:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p",
         "-c:a", "copy",
@@ -566,7 +683,7 @@ def build_final_composite(
     ]
     print(f"compositing → {out_path.name}")
     print(f"  overlays: {len(overlays)}, subtitles: {'yes' if has_subs else 'no'}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run_ffmpeg(cmd)
 
 
 # -------- Main ---------------------------------------------------------------
