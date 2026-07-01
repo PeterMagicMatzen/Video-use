@@ -1,0 +1,33 @@
+name: "🐛 Bug Report"
+description: "Report a bug or incorrect helper execution in video-use"
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please fill out this form to help us diagnose and resolve the issue.
+  - type: textarea
+    id: description
+    attributes:
+      label: "Bug Description"
+      description: "A clear description of what the issue is."
+      placeholder: "e.g., helper/cut_video.py fails with ValueError..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "Reproduction Steps"
+      description: "How can we reproduce the error?"
+      placeholder: |
+        1. Run python helpers/...
+        2. Set env inputs...
+        3. See error stack trace...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Logs and Stack Traces"
+      render: shell
