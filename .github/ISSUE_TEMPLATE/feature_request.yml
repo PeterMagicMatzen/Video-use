@@ -1,0 +1,22 @@
+name: "🚀 Feature Request"
+description: "Suggest a new video editing helper or animation tool in video-use"
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We are happy to receive suggestions to make video-use a better agent skill.
+  - type: textarea
+    id: details
+    attributes:
+      label: "Proposed Helper Details"
+      description: "What new video-editing functionality should be added?"
+      placeholder: "Add support for audio overlay blending under helper/..."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Describe alternatives you've considered"
+      description: "Any alternative solutions or features you've considered."
