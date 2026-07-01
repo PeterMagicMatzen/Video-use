@@ -3,7 +3,7 @@
 Implements the HEURISTICS render pipeline in the correct order:
 
   1. Per-segment extract with color grade + 30ms audio fades baked in
-  2. Lossless -c copy concat into base.mp4
+  2. Lossless -c copy concat into base.mov (PCM audio, sample-exact)
   3. If overlays or subtitles: single filter graph that overlays animations
      (with PTS shift so frame 0 lands at the overlay window start)
      and applies `subtitles` filter LAST → final.mp4
@@ -54,6 +54,11 @@ SUB_FORCE_STYLE = (
     "BorderStyle=1,Outline=2,Shadow=0,"
     "Alignment=2,MarginV=90"
 )
+
+# All renders are CFR at this rate; segment durations quantize to whole frames
+# of it so the audio track can be cut to the exact same length (see
+# extract_segment). Keep the -r flag and this constant in lockstep.
+OUTPUT_FPS = 24
 
 # -------- Helpers ------------------------------------------------------------
 
@@ -184,9 +189,20 @@ def extract_segment(
         vf_parts.append(grade_filter)
     vf = ",".join(vf_parts)
 
+    # Quantize the segment to whole output frames, then force the audio to the
+    # exact same duration (PCM intermediates are sample-exact). Otherwise video
+    # rounds up to a whole frame while audio keeps the raw -t length; the
+    # ~17-40ms per-segment mismatch accumulates through the -c copy concat into
+    # audible progressive A/V drift (measured -0.57s over 37 segments).
+    n_frames = max(1, int(round(duration * OUTPUT_FPS)))
+    vdur = n_frames / OUTPUT_FPS
+
     # 30ms audio fades at both edges (Rule 3) — prevent pops
-    fade_out_start = max(0.0, duration - 0.03)
-    af = f"afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out_start:.3f}:d=0.03"
+    fade_out_start = max(0.0, vdur - 0.03)
+    af = (
+        f"afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out_start:.3f}:d=0.03,"
+        f"atrim=end={vdur:.6f},apad=whole_dur={vdur:.6f}"
+    )
 
     if draft:
         preset, crf = "ultrafast", "28"
@@ -199,13 +215,15 @@ def extract_segment(
         "ffmpeg", "-y",
         "-ss", f"{seg_start:.3f}",
         "-i", str(source),
-        "-t", f"{duration:.3f}",
+        # -t overshoots by 0.5s so the audio filters have enough input to
+        # atrim/apad to exactly vdur; video is capped by -frames:v instead.
+        "-t", f"{vdur + 0.5:.3f}",
+        "-frames:v", str(n_frames),
         "-vf", vf,
         "-af", af,
         "-c:v", "libx264", "-preset", preset, "-crf", crf,
-        "-pix_fmt", "yuv420p", "-r", "24",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-        "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p", "-r", str(OUTPUT_FPS),
+        "-c:a", "pcm_s16le", "-ar", "48000",
         str(out_path),
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -217,7 +235,7 @@ def extract_all_segments(
     preview: bool,
     draft: bool = False,
 ) -> list[Path]:
-    """Extract every EDL range into edit_dir/clips_graded/seg_NN.mp4.
+    """Extract every EDL range into edit_dir/clips_graded/seg_NN.mov.
     Returns the ordered list of segment paths.
 
     If the EDL `grade` is "auto", analyze each segment range with
@@ -244,7 +262,7 @@ def extract_all_segments(
         start = float(r["start"])
         end = float(r["end"])
         duration = end - start
-        out_path = clips_dir / f"seg_{i:02d}_{src_name}.mp4"
+        out_path = clips_dir / f"seg_{i:02d}_{src_name}.mov"
 
         if is_auto:
             seg_filter, _stats = auto_grade_for_clip(src_path, start=start, duration=duration, verbose=False)
@@ -508,8 +526,10 @@ def build_final_composite(
     has_subs = subtitles_path is not None and subtitles_path.exists()
 
     if not has_overlays and not has_subs:
-        # Nothing to do — just rename/copy base to final name
-        run(["ffmpeg", "-y", "-i", str(base_path), "-c", "copy", str(out_path)], quiet=True)
+        # No filters — copy video, encode the PCM intermediate audio to AAC for mp4
+        run(["ffmpeg", "-y", "-i", str(base_path), "-c:v", "copy",
+             "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+             "-movflags", "+faststart", str(out_path)], quiet=True)
         return
 
     inputs: list[str] = ["-i", str(base_path)]
@@ -560,7 +580,7 @@ def build_final_composite(
         "-map", "0:a",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
         "-movflags", "+faststart",
         str(out_path),
     ]
@@ -618,11 +638,11 @@ def main() -> None:
 
     # 2. Concat → base
     if args.draft:
-        base_name = "base_draft.mp4"
+        base_name = "base_draft.mov"
     elif args.preview:
-        base_name = "base_preview.mp4"
+        base_name = "base_preview.mov"
     else:
-        base_name = "base.mp4"
+        base_name = "base.mov"
     base_path = edit_dir / base_name
     concat_segments(segment_paths, base_path, edit_dir)
 
