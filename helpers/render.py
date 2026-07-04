@@ -287,6 +287,18 @@ def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -
 
 
 PUNCT_BREAK = set(".,!?;:")
+# CJK support: Chinese ASR tokens are per-character; chunk by phrase, not by 2 tokens.
+CJK_PUNCT = set("，。！？；：、…～—「」『』（）")
+CJK_RE = re.compile(r"[㐀-䶿一-鿿]")
+MAX_CJK_CHARS_PER_CUE = 10
+
+
+def _is_cjk_text(text: str) -> bool:
+    return bool(CJK_RE.search(text))
+
+
+def _is_punct_only(text: str) -> bool:
+    return bool(text) and all(ch in PUNCT_BREAK or ch in CJK_PUNCT or ch.isspace() for ch in text)
 
 
 def _srt_timestamp(seconds: float) -> str:
@@ -340,19 +352,36 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
         transcript = json.loads(tr_path.read_text())
         words_in_seg = _words_in_range(transcript, seg_start, seg_end)
 
-        # Group into 2-word chunks, break on punctuation
+        # Group into cues. Latin: 2-word chunks. CJK: phrase-level —
+        # per-character ASR tokens accumulate until punctuation or MAX_CJK_CHARS_PER_CUE.
         chunks: list[list[dict]] = []
         current: list[dict] = []
+        cue_chars = 0
         for w in words_in_seg:
             text = (w.get("text") or "").strip()
             if not text:
                 continue
+            if _is_punct_only(text):
+                # Punctuation is a break marker, never displayed on its own
+                if current:
+                    chunks.append(current)
+                    current = []
+                    cue_chars = 0
+                continue
             current.append(w)
-            # Break if the current text ends in punctuation or we hit 2 words
-            ends_in_punct = bool(text) and text[-1] in PUNCT_BREAK
-            if len(current) >= 2 or ends_in_punct:
-                chunks.append(current)
-                current = []
+            cue_chars += len(text)
+            if _is_cjk_text(text):
+                ends_in_punct = text[-1] in PUNCT_BREAK or text[-1] in CJK_PUNCT
+                if cue_chars >= MAX_CJK_CHARS_PER_CUE or ends_in_punct:
+                    chunks.append(current)
+                    current = []
+                    cue_chars = 0
+            else:
+                ends_in_punct = text[-1] in PUNCT_BREAK
+                if len(current) >= 2 or ends_in_punct:
+                    chunks.append(current)
+                    current = []
+                    cue_chars = 0
         if current:
             chunks.append(current)
 
@@ -363,11 +392,19 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
             out_end = max(0.0, local_end - seg_start) + seg_offset
             if out_end <= out_start:
                 out_end = out_start + 0.4
-            text = " ".join((w.get("text") or "").strip() for w in chunk)
-            text = re.sub(r"\s+", " ", text).strip()
-            # Strip trailing punctuation for cleaner uppercase look
-            text = text.rstrip(",;:")
-            text = text.upper()
+            raw_tokens = [(w.get("text") or "").strip() for w in chunk]
+            if any(_is_cjk_text(t) for t in raw_tokens):
+                # CJK: no spaces between characters, strip edge punctuation, no uppercasing
+                text = "".join(raw_tokens)
+                text = text.strip("".join(PUNCT_BREAK | CJK_PUNCT))
+            else:
+                text = " ".join(raw_tokens)
+                text = re.sub(r"\s+", " ", text).strip()
+                # Strip trailing punctuation for cleaner uppercase look
+                text = text.rstrip(",;:")
+                text = text.upper()
+            if not text:
+                continue
             entries.append((out_start, out_end, text))
 
         seg_offset += seg_duration
@@ -499,6 +536,7 @@ def build_final_composite(
     subtitles_path: Path | None,
     out_path: Path,
     edit_dir: Path,
+    force_style: str | None = None,
 ) -> None:
     """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
 
@@ -545,8 +583,9 @@ def build_final_composite(
             .replace(":", r"\:")
             .replace("'", r"\'")
         )
+        style = force_style or SUB_FORCE_STYLE
         filter_parts.append(
-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
+            f"{current}subtitles='{subs_abs}':force_style='{style}'[outv]"
         )
         out_label = "[outv]"
     else:
@@ -647,13 +686,15 @@ def main() -> None:
 
     # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
     overlays = edl.get("overlays") or []
+    # Optional per-project subtitle style override (ASS force_style string in edl.json)
+    sub_style = edl.get("subtitle_style") or None
     if args.no_loudnorm:
         # Composite directly to final output
-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
+        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir, force_style=sub_style)
     else:
         # Composite to a temp file, then run loudnorm → final output
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir, force_style=sub_style)
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)
