@@ -288,7 +288,7 @@ def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -
 
 PUNCT_BREAK = set(".,!?;:")
 # CJK support: Chinese ASR tokens are per-character; chunk by phrase, not by 2 tokens.
-CJK_PUNCT = set("，。！？；：、…～—「」『』（）")
+CJK_PUNCT = set("，。！？；：、…～—「」『』（）“”‘’")
 CJK_RE = re.compile(r"[㐀-䶿一-鿿]")
 MAX_CJK_CHARS_PER_CUE = 10
 
@@ -394,9 +394,10 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
                 out_end = out_start + 0.4
             raw_tokens = [(w.get("text") or "").strip() for w in chunk]
             if any(_is_cjk_text(t) for t in raw_tokens):
-                # CJK: no spaces between characters, strip edge punctuation, no uppercasing
+                # CJK captions carry NO punctuation at all — cleaner on screen;
+                # phrase breaks already encode the rhythm
                 text = "".join(raw_tokens)
-                text = text.strip("".join(PUNCT_BREAK | CJK_PUNCT))
+                text = "".join(ch for ch in text if ch not in PUNCT_BREAK and ch not in CJK_PUNCT)
             else:
                 text = " ".join(raw_tokens)
                 text = re.sub(r"\s+", " ", text).strip()
@@ -555,11 +556,22 @@ def build_final_composite(
         ov_path = resolve_path(ov["file"], edit_dir)
         inputs += ["-i", str(ov_path)]
 
+    # Overlays must match the base resolution — preview/draft bases are scaled
+    # down, and ffmpeg's overlay filter CROPS (not scales) oversized inputs.
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(base_path)],
+        capture_output=True, text=True, check=True,
+    )
+    bw, bh = probe.stdout.strip().split("\n")[0].split(",")[:2]
+
     filter_parts: list[str] = []
-    # PTS-shift every overlay so its frame 0 lands at start_in_output
+    # Scale each overlay to the base, PTS-shift so its frame 0 lands at start_in_output
     for idx, ov in enumerate(overlays, start=1):
         t = float(ov["start_in_output"])
-        filter_parts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t}/TB[a{idx}]")
+        filter_parts.append(
+            f"[{idx}:v]scale={bw}:{bh},setpts=PTS-STARTPTS+{t}/TB[a{idx}]"
+        )
 
     # Chain overlays on top of base
     current = "[0:v]"
