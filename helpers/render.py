@@ -537,7 +537,14 @@ def build_final_composite(
 
     # Subtitles LAST — Rule 1
     if has_subs:
-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
+        # Windows paths must use forward slashes inside ffmpeg filter args —
+        # raw backslashes are eaten by the filter parser (D\:\Claude\... breaks).
+        subs_abs = (
+            str(subtitles_path.resolve())
+            .replace("\\", "/")
+            .replace(":", r"\:")
+            .replace("'", r"\'")
+        )
         filter_parts.append(
             f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
         )
