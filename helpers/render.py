@@ -157,6 +157,7 @@ def extract_segment(
     out_path: Path,
     preview: bool = False,
     draft: bool = False,
+    audio_filter: str = "",
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -184,9 +185,12 @@ def extract_segment(
         vf_parts.append(grade_filter)
     vf = ",".join(vf_parts)
 
-    # 30ms audio fades at both edges (Rule 3) — prevent pops
+    # 30ms audio fades at both edges (Rule 3) — prevent pops.
+    # Optional per-project audio_filter (e.g. afftdn denoise) runs BEFORE the fades.
     fade_out_start = max(0.0, duration - 0.03)
     af = f"afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out_start:.3f}:d=0.03"
+    if audio_filter:
+        af = f"{audio_filter},{af}"
 
     if draft:
         preset, crf = "ultrafast", "28"
@@ -255,7 +259,8 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft)
+        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft,
+                        audio_filter=edl.get("audio_filter") or "")
         seg_paths.append(out_path)
 
     return seg_paths
@@ -287,6 +292,18 @@ def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -
 
 
 PUNCT_BREAK = set(".,!?;:")
+# CJK support: Chinese ASR tokens are per-character; chunk by phrase, not by 2 tokens.
+CJK_PUNCT = set("，。！？；：、…～—「」『』（）“”‘’")
+CJK_RE = re.compile(r"[㐀-䶿一-鿿]")
+MAX_CJK_CHARS_PER_CUE = 10
+
+
+def _is_cjk_text(text: str) -> bool:
+    return bool(CJK_RE.search(text))
+
+
+def _is_punct_only(text: str) -> bool:
+    return bool(text) and all(ch in PUNCT_BREAK or ch in CJK_PUNCT or ch.isspace() for ch in text)
 
 
 def _srt_timestamp(seconds: float) -> str:
@@ -340,19 +357,36 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
         transcript = json.loads(tr_path.read_text())
         words_in_seg = _words_in_range(transcript, seg_start, seg_end)
 
-        # Group into 2-word chunks, break on punctuation
+        # Group into cues. Latin: 2-word chunks. CJK: phrase-level —
+        # per-character ASR tokens accumulate until punctuation or MAX_CJK_CHARS_PER_CUE.
         chunks: list[list[dict]] = []
         current: list[dict] = []
+        cue_chars = 0
         for w in words_in_seg:
             text = (w.get("text") or "").strip()
             if not text:
                 continue
+            if _is_punct_only(text):
+                # Punctuation is a break marker, never displayed on its own
+                if current:
+                    chunks.append(current)
+                    current = []
+                    cue_chars = 0
+                continue
             current.append(w)
-            # Break if the current text ends in punctuation or we hit 2 words
-            ends_in_punct = bool(text) and text[-1] in PUNCT_BREAK
-            if len(current) >= 2 or ends_in_punct:
-                chunks.append(current)
-                current = []
+            cue_chars += len(text)
+            if _is_cjk_text(text):
+                ends_in_punct = text[-1] in PUNCT_BREAK or text[-1] in CJK_PUNCT
+                if cue_chars >= MAX_CJK_CHARS_PER_CUE or ends_in_punct:
+                    chunks.append(current)
+                    current = []
+                    cue_chars = 0
+            else:
+                ends_in_punct = text[-1] in PUNCT_BREAK
+                if len(current) >= 2 or ends_in_punct:
+                    chunks.append(current)
+                    current = []
+                    cue_chars = 0
         if current:
             chunks.append(current)
 
@@ -363,11 +397,20 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
             out_end = max(0.0, local_end - seg_start) + seg_offset
             if out_end <= out_start:
                 out_end = out_start + 0.4
-            text = " ".join((w.get("text") or "").strip() for w in chunk)
-            text = re.sub(r"\s+", " ", text).strip()
-            # Strip trailing punctuation for cleaner uppercase look
-            text = text.rstrip(",;:")
-            text = text.upper()
+            raw_tokens = [(w.get("text") or "").strip() for w in chunk]
+            if any(_is_cjk_text(t) for t in raw_tokens):
+                # CJK captions carry NO punctuation at all — cleaner on screen;
+                # phrase breaks already encode the rhythm
+                text = "".join(raw_tokens)
+                text = "".join(ch for ch in text if ch not in PUNCT_BREAK and ch not in CJK_PUNCT)
+            else:
+                text = " ".join(raw_tokens)
+                text = re.sub(r"\s+", " ", text).strip()
+                # Strip trailing punctuation for cleaner uppercase look
+                text = text.rstrip(",;:")
+                text = text.upper()
+            if not text:
+                continue
             entries.append((out_start, out_end, text))
 
         seg_offset += seg_duration
@@ -499,6 +542,7 @@ def build_final_composite(
     subtitles_path: Path | None,
     out_path: Path,
     edit_dir: Path,
+    force_style: str | None = None,
 ) -> None:
     """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
 
@@ -517,11 +561,22 @@ def build_final_composite(
         ov_path = resolve_path(ov["file"], edit_dir)
         inputs += ["-i", str(ov_path)]
 
+    # Overlays must match the base resolution — preview/draft bases are scaled
+    # down, and ffmpeg's overlay filter CROPS (not scales) oversized inputs.
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(base_path)],
+        capture_output=True, text=True, check=True,
+    )
+    bw, bh = probe.stdout.strip().split("\n")[0].split(",")[:2]
+
     filter_parts: list[str] = []
-    # PTS-shift every overlay so its frame 0 lands at start_in_output
+    # Scale each overlay to the base, PTS-shift so its frame 0 lands at start_in_output
     for idx, ov in enumerate(overlays, start=1):
         t = float(ov["start_in_output"])
-        filter_parts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t}/TB[a{idx}]")
+        filter_parts.append(
+            f"[{idx}:v]scale={bw}:{bh},setpts=PTS-STARTPTS+{t}/TB[a{idx}]"
+        )
 
     # Chain overlays on top of base
     current = "[0:v]"
@@ -537,9 +592,17 @@ def build_final_composite(
 
     # Subtitles LAST — Rule 1
     if has_subs:
-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
+        # Windows paths must use forward slashes inside ffmpeg filter args —
+        # raw backslashes are eaten by the filter parser (D\:\Claude\... breaks).
+        subs_abs = (
+            str(subtitles_path.resolve())
+            .replace("\\", "/")
+            .replace(":", r"\:")
+            .replace("'", r"\'")
+        )
+        style = force_style or SUB_FORCE_STYLE
         filter_parts.append(
-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
+            f"{current}subtitles='{subs_abs}':force_style='{style}'[outv]"
         )
         out_label = "[outv]"
     else:
@@ -640,13 +703,15 @@ def main() -> None:
 
     # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
     overlays = edl.get("overlays") or []
+    # Optional per-project subtitle style override (ASS force_style string in edl.json)
+    sub_style = edl.get("subtitle_style") or None
     if args.no_loudnorm:
         # Composite directly to final output
-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
+        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir, force_style=sub_style)
     else:
         # Composite to a temp file, then run loudnorm → final output
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir, force_style=sub_style)
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)
