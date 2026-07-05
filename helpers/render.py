@@ -157,6 +157,7 @@ def extract_segment(
     out_path: Path,
     preview: bool = False,
     draft: bool = False,
+    audio_filter: str = "",
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -184,9 +185,12 @@ def extract_segment(
         vf_parts.append(grade_filter)
     vf = ",".join(vf_parts)
 
-    # 30ms audio fades at both edges (Rule 3) — prevent pops
+    # 30ms audio fades at both edges (Rule 3) — prevent pops.
+    # Optional per-project audio_filter (e.g. afftdn denoise) runs BEFORE the fades.
     fade_out_start = max(0.0, duration - 0.03)
     af = f"afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out_start:.3f}:d=0.03"
+    if audio_filter:
+        af = f"{audio_filter},{af}"
 
     if draft:
         preset, crf = "ultrafast", "28"
@@ -255,7 +259,8 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft)
+        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft,
+                        audio_filter=edl.get("audio_filter") or "")
         seg_paths.append(out_path)
 
     return seg_paths
