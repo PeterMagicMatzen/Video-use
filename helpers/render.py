@@ -668,6 +668,11 @@ def build_final_composite(
 
 
 def main() -> None:
+    # Windows consoles often default to cp1252, which can't encode the arrow
+    # characters used in progress prints (U+2192) — replace instead of crashing.
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+
     ap = argparse.ArgumentParser(description="Render a video from an EDL")
     ap.add_argument("edl", type=Path, help="Path to edl.json")
     ap.add_argument("-o", "--output", type=Path, required=True, help="Output video path")
