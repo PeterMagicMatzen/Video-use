@@ -4,6 +4,10 @@
 *.pem
 *.key
 
+# Local agent config (user-specific, may contain tokens in permission rules)
+.claude/settings.local.json
+.claude/memory/
+
 # Python
 __pycache__/
 *.py[cod]
