@@ -2,7 +2,7 @@
 
 Groups word-level entries into phrase-level lines, breaking on any silence
 >= 0.5s OR speaker change. Each phrase gets a [start-end] prefix. This is
-the PRIMARY artifact the editor sub-agent reads to pick cuts — it fits one
+the PRIMARY artifact the editor sub-agent reads to pick cuts -- it fits one
 hour of takes in a tenth the tokens of raw Scribe JSON and gives
 word-boundary precision from text alone.
 
@@ -150,7 +150,7 @@ def render_markdown(entries: list[tuple[str, float, list[dict]]], silence_thresh
         for p in phrases:
             spk = p.get("speaker_id")
             if spk is not None:
-                # Scribe returns IDs like "speaker_0" — strip the prefix for readability
+                # Scribe returns IDs like "speaker_0" -- strip the prefix for readability
                 spk_str = str(spk)
                 if spk_str.startswith("speaker_"):
                     spk_str = spk_str[len("speaker_"):]
@@ -197,7 +197,7 @@ def main() -> None:
     total_phrases = sum(len(e[2]) for e in entries)
     total_duration = sum(e[1] for e in entries)
     kb = out_path.stat().st_size / 1024
-    print(f"packed {len(entries)} transcripts → {out_path}")
+    print(f"packed {len(entries)} transcripts -> {out_path}")
     print(f"  {total_phrases} phrases, {format_duration(total_duration)} total runtime")
     print(f"  {kb:.1f} KB")
 

@@ -44,6 +44,9 @@ def extract_frames(video: Path, start: float, end: float, n: int, dest_dir: Path
     else:
         step = (end - start) / (n - 1)
         times = [start + i * step for i in range(n)]
+        # ffmpeg -ss landing exactly on (or past) the container's last frame
+        # timestamp can miss it entirely -- pull the final sample back slightly.
+        times[-1] = max(start, times[-1] - 0.05)
 
     paths: list[Path] = []
     for i, t in enumerate(times):
