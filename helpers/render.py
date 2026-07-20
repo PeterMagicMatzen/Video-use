@@ -6,7 +6,7 @@ Implements the HEURISTICS render pipeline in the correct order:
   2. Lossless -c copy concat into base.mp4
   3. If overlays or subtitles: single filter graph that overlays animations
      (with PTS shift so frame 0 lands at the overlay window start)
-     and applies `subtitles` filter LAST → final.mp4
+     and applies `subtitles` filter LAST -> final.mp4
 
 Optionally builds a master SRT from the per-source transcripts + EDL
 output-timeline offsets, applies the proven force_style (2-word
@@ -40,12 +40,12 @@ except Exception:
 
 # -------- Subtitle style (bold-overlay, proven at 1920×1080 and 1080×1920) --
 #
-# MarginV is NOT taste — it is a platform safe-zone rule.
+# MarginV is NOT taste -- it is a platform safe-zone rule.
 # TikTok / IG Reels / Shorts UI (caption, username, music, right-rail actions)
 # covers roughly the bottom ~25–30% of a 1080×1920 frame. Captions placed near
 # the bottom edge get clipped or obscured by the UI. libass auto-scales the
 # render canvas relative to PlayResY=288, so MarginV=90 lands the caption
-# baseline roughly 30% up from the bottom on any aspect — clear of the UI on
+# baseline roughly 30% up from the bottom on any aspect -- clear of the UI on
 # every major vertical-video platform. Do not drop this below ~75 without a
 # specific reason.
 SUB_FORCE_STYLE = (
@@ -60,7 +60,7 @@ SUB_FORCE_STYLE = (
 
 def run(cmd: list[str], quiet: bool = False) -> None:
     if not quiet:
-        print(f"  $ {' '.join(str(c) for c in cmd[:6])}{' …' if len(cmd) > 6 else ''}")
+        print(f"  $ {' '.join(str(c) for c in cmd[:6])}{' ...' if len(cmd) > 6 else ''}")
     subprocess.run(cmd, check=True)
 
 
@@ -92,14 +92,14 @@ def resolve_path(maybe_path: str, base: Path) -> Path:
     return (base / p).resolve()
 
 
-# -------- HDR → SDR tone mapping (HLG / PQ sources) --------------------------
+# -------- HDR -> SDR tone mapping (HLG / PQ sources) --------------------------
 #
 # iPhone defaults to HLG HDR in Rec.2020 (and many mirrorless cameras ship PQ).
-# If the source is HDR and we only downconvert bit depth (yuv420p10le → yuv420p)
+# If the source is HDR and we only downconvert bit depth (yuv420p10le -> yuv420p)
 # without tone-mapping, the output is 8-bit but still carries HLG/PQ transfer
 # metadata. Players that honor the metadata (screen recorders, most social
 # upload re-encodes) interpret 8-bit values in an HDR container and the result
-# looks oversaturated / blown out. QuickTime on macOS can hide this locally —
+# looks oversaturated / blown out. QuickTime on macOS can hide this locally --
 # screen recording and uploaded renders cannot.
 #
 # Fix: detect HDR via color_transfer and prepend a zscale+tonemap chain to the
@@ -132,15 +132,33 @@ def is_hdr_source(video: Path) -> bool:
 
 
 def is_portrait_source(video: Path) -> bool:
-    """Return True if the video's height > width (portrait / vertical)."""
+    """Return True if the video DISPLAYS taller than wide (portrait / vertical).
+
+    Coded width/height alone isn't enough -- phone footage (WhatsApp, etc.)
+    commonly carries a +/-90 degree display-matrix rotation, so a clip coded
+    landscape (e.g. 1024x576) can actually decode and display as portrait
+    (576x1024). ffmpeg's decoder auto-applies that rotation before any -vf
+    filter runs, so the scale/crop target must be based on the DISPLAYED
+    orientation, not the coded one, or segments get scaled/cropped to the
+    wrong canvas entirely (landscape target on portrait pixels).
+    """
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "csv=p=0", str(video)],
+             "-show_entries", "stream=width,height:stream_side_data=rotation",
+             "-of", "json", str(video)],
             capture_output=True, text=True, check=True,
         )
-        w, h = map(int, out.stdout.strip().split(","))
+        data = json.loads(out.stdout)
+        stream = data["streams"][0]
+        w, h = int(stream["width"]), int(stream["height"])
+        rotation = 0
+        for sd in stream.get("side_data_list", []):
+            if "rotation" in sd:
+                rotation = int(round(float(sd["rotation"])))
+                break
+        if abs(rotation) % 180 == 90:
+            w, h = h, w
         return h > w
     except Exception:
         return False
@@ -157,6 +175,8 @@ def extract_segment(
     out_path: Path,
     preview: bool = False,
     draft: bool = False,
+    crf_override: str | None = None,
+    preset_override: str | None = None,
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -172,9 +192,14 @@ def extract_segment(
 
     portrait = is_portrait_source(source)
     if draft:
-        scale = "scale=-2:1280" if portrait else "scale=1280:-2"
+        target_w, target_h = (720, 1280) if portrait else (1280, 720)
     else:
-        scale = "scale=-2:1920" if portrait else "scale=1920:-2"
+        target_w, target_h = (1080, 1920) if portrait else (1920, 1080)
+    # Scale-to-cover + center-crop to an exact canonical canvas. Sources whose
+    # aspect ratio isn't exactly 9:16/16:9 (common across mixed phone footage)
+    # would otherwise land on slightly different pixel widths per segment,
+    # which breaks the lossless -c copy concat (Rule 2).
+    scale = f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,crop={target_w}:{target_h}"
 
     vf_parts: list[str] = []
     if is_hdr_source(source):
@@ -184,7 +209,7 @@ def extract_segment(
         vf_parts.append(grade_filter)
     vf = ",".join(vf_parts)
 
-    # 30ms audio fades at both edges (Rule 3) — prevent pops
+    # 30ms audio fades at both edges (Rule 3) -- prevent pops
     fade_out_start = max(0.0, duration - 0.03)
     af = f"afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out_start:.3f}:d=0.03"
 
@@ -194,6 +219,10 @@ def extract_segment(
         preset, crf = "medium", "22"
     else:
         preset, crf = "fast", "20"
+    if crf_override is not None:
+        crf = crf_override
+    if preset_override is not None:
+        preset = preset_override
 
     cmd = [
         "ffmpeg", "-y",
@@ -216,6 +245,8 @@ def extract_all_segments(
     edit_dir: Path,
     preview: bool,
     draft: bool = False,
+    crf_override: str | None = None,
+    preset_override: str | None = None,
 ) -> list[Path]:
     """Extract every EDL range into edit_dir/clips_graded/seg_NN.mp4.
     Returns the ordered list of segment paths.
@@ -235,7 +266,7 @@ def extract_all_segments(
     sources = edl["sources"]
 
     seg_paths: list[Path] = []
-    print(f"extracting {len(ranges)} segment(s) → {clips_dir.name}/")
+    print(f"extracting {len(ranges)} segment(s) -> {clips_dir.name}/")
     if is_auto:
         print("  (auto-grade per segment: analyzing each range)")
     for i, r in enumerate(ranges):
@@ -255,7 +286,10 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft)
+        extract_segment(
+            src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft,
+            crf_override=crf_override, preset_override=preset_override,
+        )
         seg_paths.append(out_path)
 
     return seg_paths
@@ -278,7 +312,7 @@ def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -
         "-movflags", "+faststart",
         str(out_path),
     ]
-    print(f"concat → {out_path.name}")
+    print(f"concat -> {out_path.name}")
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     concat_list.unlink(missing_ok=True)
 
@@ -381,7 +415,7 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
         lines.append(t)
         lines.append("")
     out_path.write_text("\n".join(lines))
-    print(f"master SRT → {out_path.name} ({len(entries)} cues)")
+    print(f"master SRT -> {out_path.name} ({len(entries)} cues)")
 
 
 # -------- Loudness normalization (social-ready audio) -----------------------
@@ -413,7 +447,7 @@ def measure_loudness(video_path: Path) -> dict[str, str] | None:
     # loudnorm prints the JSON to stderr at the end of the run
     stderr = proc.stderr
 
-    # Find the JSON block — loudnorm output contains a `{ ... }` block
+    # Find the JSON block -- loudnorm output contains a `{ ... }` block
     start = stderr.rfind("{")
     end = stderr.rfind("}")
     if start == -1 or end == -1 or end <= start:
@@ -442,7 +476,7 @@ def apply_loudnorm_two_pass(
     for speed. Final mode always does the proper two-pass.
     """
     if preview:
-        # One-pass approximation — faster, slightly less accurate.
+        # One-pass approximation -- faster, slightly less accurate.
         filter_str = f"loudnorm=I={LOUDNORM_I}:TP={LOUDNORM_TP}:LRA={LOUDNORM_LRA}"
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-nostats",
@@ -453,7 +487,7 @@ def apply_loudnorm_two_pass(
             "-movflags", "+faststart",
             str(output_path),
         ]
-        print(f"  loudnorm (1-pass preview) → {output_path.name}")
+        print(f"  loudnorm (1-pass preview) -> {output_path.name}")
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         return True
 
@@ -461,7 +495,7 @@ def apply_loudnorm_two_pass(
     print(f"  loudnorm pass 1: measuring {input_path.name}")
     measurement = measure_loudness(input_path)
     if measurement is None:
-        print("  loudnorm measurement failed — falling back to 1-pass")
+        print("  loudnorm measurement failed -- falling back to 1-pass")
         return apply_loudnorm_two_pass(input_path, output_path, preview=True)
 
     print(f"    measured: I={measurement['input_i']} LUFS  "
@@ -485,7 +519,7 @@ def apply_loudnorm_two_pass(
         "-movflags", "+faststart",
         str(output_path),
     ]
-    print(f"  loudnorm pass 2: normalizing → {output_path.name}")
+    print(f"  loudnorm pass 2: normalizing -> {output_path.name}")
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     return True
 
@@ -500,7 +534,7 @@ def build_final_composite(
     out_path: Path,
     edit_dir: Path,
 ) -> None:
-    """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
+    """Final pass: base -> overlays (PTS-shifted) -> subtitles LAST -> out.
 
     If there are no overlays and no subtitles, just copy base to out.
     """
@@ -508,7 +542,7 @@ def build_final_composite(
     has_subs = subtitles_path is not None and subtitles_path.exists()
 
     if not has_overlays and not has_subs:
-        # Nothing to do — just rename/copy base to final name
+        # Nothing to do -- just rename/copy base to final name
         run(["ffmpeg", "-y", "-i", str(base_path), "-c", "copy", str(out_path)], quiet=True)
         return
 
@@ -535,7 +569,7 @@ def build_final_composite(
         )
         current = next_label
 
-    # Subtitles LAST — Rule 1
+    # Subtitles LAST -- Rule 1
     if has_subs:
         subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
         filter_parts.append(
@@ -564,7 +598,7 @@ def build_final_composite(
         "-movflags", "+faststart",
         str(out_path),
     ]
-    print(f"compositing → {out_path.name}")
+    print(f"compositing -> {out_path.name}")
     print(f"  overlays: {len(overlays)}, subtitles: {'yes' if has_subs else 'no'}")
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
@@ -579,12 +613,12 @@ def main() -> None:
     ap.add_argument(
         "--preview",
         action="store_true",
-        help="Preview mode: 1080p, medium, CRF 22 — evaluable for QC, faster than final.",
+        help="Preview mode: 1080p, medium, CRF 22 -- evaluable for QC, faster than final.",
     )
     ap.add_argument(
         "--draft",
         action="store_true",
-        help="Draft mode: 720p, ultrafast, CRF 28 — cut-point verification only.",
+        help="Draft mode: 720p, ultrafast, CRF 28 -- cut-point verification only.",
     )
     ap.add_argument(
         "--build-subtitles",
@@ -601,6 +635,18 @@ def main() -> None:
         action="store_true",
         help="Skip audio loudness normalization. Default is on (-14 LUFS, -1 dBTP, LRA 11).",
     )
+    ap.add_argument(
+        "--crf",
+        type=str,
+        default=None,
+        help="Override the quality-ladder CRF (lower = higher quality/bitrate, e.g. 14-16 for near-lossless).",
+    )
+    ap.add_argument(
+        "--preset",
+        type=str,
+        default=None,
+        help="Override the quality-ladder x264 preset (e.g. slow/veryslow for better quality per bit).",
+    )
     args = ap.parse_args()
 
     edl_path = args.edl.resolve()
@@ -613,10 +659,11 @@ def main() -> None:
 
     # 1. Extract per-segment (auto-grade per range if EDL grade is "auto")
     segment_paths = extract_all_segments(
-        edl, edit_dir, preview=args.preview, draft=args.draft
+        edl, edit_dir, preview=args.preview, draft=args.draft,
+        crf_override=args.crf, preset_override=args.preset,
     )
 
-    # 2. Concat → base
+    # 2. Concat -> base
     if args.draft:
         base_name = "base_draft.mp4"
     elif args.preview:
@@ -638,16 +685,16 @@ def main() -> None:
                 print(f"warning: subtitles path in EDL does not exist: {subs_path}")
                 subs_path = None
 
-    # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
+    # 4. Composite (overlays + subtitles LAST) -> intermediate (pre-loudnorm) path
     overlays = edl.get("overlays") or []
     if args.no_loudnorm:
         # Composite directly to final output
         build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
     else:
-        # Composite to a temp file, then run loudnorm → final output
+        # Composite to a temp file, then run loudnorm -> final output
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
         build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
-        print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
+        print("loudness normalization -> social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)
 
