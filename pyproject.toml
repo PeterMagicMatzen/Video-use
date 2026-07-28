@@ -4,19 +4,22 @@ version = "0.1.0"
 description = "Conversation-driven video editor skill for Claude Code"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
+# Lower bounds are security floors: each is the highest version any OSV advisory
+# for that package names as fixed. librosa and matplotlib carry no advisories and
+# stay unconstrained. All floors support requires-python >= 3.10.
 dependencies = [
-    "requests",
+    "requests>=2.33.0",
     "librosa",
     "matplotlib",
-    "pillow",
-    "numpy",
+    "pillow>=12.3.0",
+    "numpy>=1.22",
 ]
 
 [project.optional-dependencies]
 animations = ["manim"]
 
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
