@@ -4,7 +4,8 @@ Walks <videos_dir> for common video extensions, transcribes each via Groq
 Whisper or ElevenLabs Scribe, writes transcripts to
 <videos_dir>/edit/transcripts/<name>.json.
 
-Cached per-file: any source that already has a transcript is skipped.
+Cached per-file: any source that already has a transcript is skipped, unless
+--provider names a backend other than the one that transcript came from.
 
 Usage:
     python helpers/transcribe_batch.py <videos_dir>
@@ -22,7 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from transcribe import resolve_provider, transcribe_one
+from transcribe import _cached_provider, resolve_provider, transcribe_one
 
 
 VIDEO_EXTS = {".mp4", ".MP4", ".mov", ".MOV", ".mkv", ".MKV", ".avi", ".AVI", ".m4v"}
@@ -77,15 +78,24 @@ def main() -> None:
     if not videos:
         sys.exit(f"no videos found in {videos_dir}")
 
-    already_cached = [v for v in videos if (edit_dir / "transcripts" / f"{v.stem}.json").exists()]
+    provider, api_key = resolve_provider(args.provider, args.num_speakers)
+    provider_explicit = args.provider != "auto"
+
+    def is_cached(video: Path) -> bool:
+        path = edit_dir / "transcripts" / f"{video.stem}.json"
+        if not path.exists():
+            return False
+        # An explicit --provider re-does sources cached under a different one.
+        cached = _cached_provider(path)
+        return not (provider_explicit and cached and cached != provider)
+
+    already_cached = [v for v in videos if is_cached(v)]
     pending = [v for v in videos if v not in already_cached]
 
     print(f"found {len(videos)} videos ({len(already_cached)} cached, {len(pending)} to transcribe)")
     if not pending:
         print("nothing to do")
         return
-
-    provider, api_key = resolve_provider(args.provider, args.num_speakers)
 
     print(f"transcribing {len(pending)} files with {args.workers} parallel workers ({provider})")
     t0 = time.time()
@@ -102,6 +112,7 @@ def main() -> None:
                 num_speakers=args.num_speakers,
                 verbose=False,
                 provider=provider,
+                provider_explicit=provider_explicit,
             ): v
             for v in pending
         }

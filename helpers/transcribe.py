@@ -11,7 +11,8 @@ Providers:
 
 Default is `auto`: Groq if GROQ_API_KEY resolves, otherwise ElevenLabs.
 
-Cached: if the output file already exists, the upload is skipped.
+Cached: if the output file already exists, the upload is skipped — unless
+--provider names a backend other than the one that transcript came from.
 
 Usage:
     python helpers/transcribe.py <video_path>
@@ -219,6 +220,16 @@ def call_groq(
     }
 
 
+def _cached_provider(transcript_path: Path) -> str | None:
+    """Which provider wrote this transcript, or None if it predates the field
+    (or is unreadable). Unknown means 'leave it alone' — never re-upload a
+    transcript we can't prove came from a different provider."""
+    try:
+        return json.loads(transcript_path.read_text()).get("provider")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def transcribe_one(
     video: Path,
     edit_dir: Path,
@@ -226,20 +237,37 @@ def transcribe_one(
     language: str | None = None,
     num_speakers: int | None = None,
     verbose: bool = True,
-    provider: str = "groq",
+    provider: str = "elevenlabs",
+    provider_explicit: bool = False,
 ) -> Path:
     """Transcribe a single video. Returns path to transcript JSON.
 
-    Cached: returns existing path immediately if the transcript already exists.
+    Cached: returns the existing path immediately if the transcript already
+    exists. The one exception is `provider_explicit` — someone who asked for a
+    named provider on a source cached under a different one is switching on
+    purpose (multi-speaker footage, or a take over Groq's size cap), and the
+    docs point them here. Under `auto` the cache always wins, so no run ever
+    re-uploads by accident.
+
+    `provider` defaults to elevenlabs to keep pre-Groq programmatic callers
+    working; both CLIs pass it explicitly.
     """
     transcripts_dir = edit_dir / "transcripts"
     transcripts_dir.mkdir(parents=True, exist_ok=True)
     out_path = transcripts_dir / f"{video.stem}.json"
 
     if out_path.exists():
+        cached_provider = _cached_provider(out_path)
+        stale = provider_explicit and cached_provider and cached_provider != provider
+        if not stale:
+            if verbose:
+                note = ""
+                if cached_provider and cached_provider != provider:
+                    note = f" (from {cached_provider}; --provider {provider} to redo)"
+                print(f"cached: {out_path.name}{note}")
+            return out_path
         if verbose:
-            print(f"cached: {out_path.name}")
-        return out_path
+            print(f"  re-transcribing {video.name}: cached under {cached_provider}", flush=True)
 
     if verbose:
         print(f"  extracting audio from {video.name}", flush=True)
@@ -257,6 +285,7 @@ def transcribe_one(
         else:
             payload = call_scribe(audio, api_key, language, num_speakers)
 
+    payload["provider"] = provider
     out_path.write_text(json.dumps(payload, indent=2))
     dt = time.time() - t0
 
@@ -312,6 +341,7 @@ def main() -> None:
         language=args.language,
         num_speakers=args.num_speakers,
         provider=provider,
+        provider_explicit=args.provider != "auto",
     )
 
 

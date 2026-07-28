@@ -109,11 +109,12 @@ Without a key, nothing transcribes. Two providers work; **one key is enough**:
 
     > I need a transcription key. Free option: a Groq key from https://console.groq.com/keys — good for single-speaker footage. Paid option: ElevenLabs from https://elevenlabs.io/app/settings/api-keys, which adds speaker labels and audio events and handles long takes. Paste whichever you want and I'll write it to `~/Developer/video-use/.env`. If you already have one exported, say "use env" and I'll skip.
 
-    When the user pastes a key, write it to `~/Developer/video-use/.env` under the matching name (`GROQ_API_KEY` or `ELEVENLABS_API_KEY`):
+    When the user pastes a key, write it to `~/Developer/video-use/.env`. **Set `VAR` to match the key they actually gave you** — writing an ElevenLabs key under `GROQ_API_KEY` means the default `auto` provider sends it to Groq and the first transcription fails with a 401:
 
     ```bash
+    VAR=GROQ_API_KEY          # or ELEVENLABS_API_KEY, matching what the user pasted
     cp -n ~/Developer/video-use/.env.example ~/Developer/video-use/.env
-    printf 'GROQ_API_KEY=%s\n' "$KEY" >> ~/Developer/video-use/.env
+    printf '%s=%s\n' "$VAR" "$KEY" >> ~/Developer/video-use/.env
     chmod 600 ~/Developer/video-use/.env
     ```
 

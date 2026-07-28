@@ -27,7 +27,7 @@ These are the things where deviation produces silent failures or broken output. 
 6. **Never cut inside a word.** Snap every cut edge to a word boundary from the transcript.
 7. **Pad every cut edge.** Working window: 30–200ms. Transcript timestamps drift 50–100ms — padding absorbs the drift. Tighter for fast-paced, looser for cinematic.
 8. **Word-level verbatim ASR only.** Never SRT/phrase mode (loses sub-second gap data). Never normalized fillers (loses editorial signal).
-9. **Cache transcripts per source.** Never re-transcribe unless the source file itself changed.
+9. **Cache transcripts per source.** Never re-transcribe unless the source file itself changed, or the user names a different `--provider` for it.
 10. **Parallel sub-agents for multiple animations.** Never sequential. Spawn N at once via the `Agent` tool; total wall time ≈ slowest one.
 11. **Strategy confirmation before execution.** Never touch the cut until the user has approved the plain-English plan.
 12. **All session outputs in `<videos_dir>/edit/`.** Never write inside the `video-use/` project directory.
@@ -96,6 +96,8 @@ For animations, create `<edit>/animations/slot_<id>/` with `Bash` and spawn a su
 Groq transcripts also carry no `audio_event` entries, so laughs and applause won't appear as beats. Read them off the waveform in `timeline_view` instead, or transcribe that source with ElevenLabs.
 
 A take that overruns the 25 MB cap fails with an explicit error, not a silent truncation. Re-run that source with `--provider elevenlabs`, or split it.
+
+Naming a provider explicitly re-transcribes any source already cached under the other one — that's the documented escape hatch, and the only exception to Hard Rule 9. Under `--provider auto` the cache always wins, so no run re-uploads by accident.
 
 ## The process
 
