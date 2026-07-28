@@ -11,8 +11,9 @@ Providers:
 
 Default is `auto`: Groq if GROQ_API_KEY resolves, otherwise ElevenLabs.
 
-Cached: if the output file already exists, the upload is skipped — unless
---provider names a backend other than the one that transcript came from.
+Cached: if the output file already exists, the upload is skipped — unless the
+run deliberately picked a different backend than the one that transcript came
+from, via --provider or via --num-speakers routing to ElevenLabs.
 
 Usage:
     python helpers/transcribe.py <video_path>
@@ -86,10 +87,19 @@ def load_provider_key(preferred: str = "auto") -> tuple[str, str]:
     sys.exit("No transcription key: set GROQ_API_KEY (free) or ELEVENLABS_API_KEY in .env")
 
 
-def resolve_provider(preferred: str, num_speakers: int | None) -> tuple[str, str]:
-    """load_provider_key, but route diarization requests away from Groq."""
+def resolve_provider(preferred: str, num_speakers: int | None) -> tuple[str, str, bool]:
+    """load_provider_key, but route diarization requests away from Groq.
+
+    Returns (provider, api_key, explicit). `explicit` means the backend was
+    deliberately chosen — either named outright or forced by --num-speakers —
+    and it is decided here, next to the routing it depends on, so the two can't
+    drift apart. Cache staleness keys off it: asking for diarization has to beat
+    a cached Groq transcript that has no speaker_id to give.
+    """
+    explicit = preferred != "auto"
     if preferred == "auto" and num_speakers and _read_env_var("ELEVENLABS_API_KEY"):
         preferred = "elevenlabs"
+        explicit = True
 
     provider, api_key = load_provider_key(preferred)
     if num_speakers and provider == "groq":
@@ -98,7 +108,7 @@ def resolve_provider(preferred: str, num_speakers: int | None) -> tuple[str, str
             "no speaker_id in the transcript",
             file=sys.stderr,
         )
-    return provider, api_key
+    return provider, api_key, explicit
 
 
 def extract_audio(video_path: Path, dest: Path) -> None:
@@ -332,7 +342,7 @@ def main() -> None:
         sys.exit(f"video not found: {video}")
 
     edit_dir = (args.edit_dir or (video.parent / "edit")).resolve()
-    provider, api_key = resolve_provider(args.provider, args.num_speakers)
+    provider, api_key, provider_explicit = resolve_provider(args.provider, args.num_speakers)
 
     transcribe_one(
         video=video,
@@ -341,7 +351,7 @@ def main() -> None:
         language=args.language,
         num_speakers=args.num_speakers,
         provider=provider,
-        provider_explicit=args.provider != "auto",
+        provider_explicit=provider_explicit,
     )
 
 

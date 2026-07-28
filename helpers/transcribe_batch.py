@@ -4,8 +4,9 @@ Walks <videos_dir> for common video extensions, transcribes each via Groq
 Whisper or ElevenLabs Scribe, writes transcripts to
 <videos_dir>/edit/transcripts/<name>.json.
 
-Cached per-file: any source that already has a transcript is skipped, unless
---provider names a backend other than the one that transcript came from.
+Cached per-file: any source that already has a transcript is skipped, unless the
+run deliberately picked a different backend than the one that transcript came
+from, via --provider or via --num-speakers routing to ElevenLabs.
 
 Usage:
     python helpers/transcribe_batch.py <videos_dir>
@@ -78,8 +79,7 @@ def main() -> None:
     if not videos:
         sys.exit(f"no videos found in {videos_dir}")
 
-    provider, api_key = resolve_provider(args.provider, args.num_speakers)
-    provider_explicit = args.provider != "auto"
+    provider, api_key, provider_explicit = resolve_provider(args.provider, args.num_speakers)
 
     def is_cached(video: Path) -> bool:
         path = edit_dir / "transcripts" / f"{video.stem}.json"
