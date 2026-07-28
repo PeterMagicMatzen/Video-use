@@ -240,6 +240,22 @@ def _cached_provider(transcript_path: Path) -> str | None:
         return None
 
 
+def is_transcript_stale(path: Path, provider: str, provider_explicit: bool) -> bool:
+    """Whether a cached transcript has to be redone for `provider`.
+
+    The single source of truth for cache staleness — both the single-file and
+    batch paths ask this rather than re-deriving it, so they cannot disagree
+    about which cache entries survive.
+
+    Only a deliberate backend choice invalidates a cache, so an `auto` run
+    answers False without opening the file: the common path parses nothing.
+    """
+    if not provider_explicit:
+        return False
+    cached = _cached_provider(path)
+    return bool(cached and cached != provider)
+
+
 def transcribe_one(
     video: Path,
     edit_dir: Path,
@@ -252,12 +268,10 @@ def transcribe_one(
 ) -> Path:
     """Transcribe a single video. Returns path to transcript JSON.
 
-    Cached: returns the existing path immediately if the transcript already
-    exists. The one exception is `provider_explicit` — someone who asked for a
-    named provider on a source cached under a different one is switching on
-    purpose (multi-speaker footage, or a take over Groq's size cap), and the
-    docs point them here. Under `auto` the cache always wins, so no run ever
-    re-uploads by accident.
+    Cached: returns the existing path immediately unless is_transcript_stale()
+    says the run deliberately picked a different backend — multi-speaker footage,
+    or a take over Groq's size cap, both of which the docs point here. Under
+    `auto` the cache always wins, so no run re-uploads by accident.
 
     `provider` defaults to elevenlabs to keep pre-Groq programmatic callers
     working; both CLIs pass it explicitly.
@@ -267,17 +281,18 @@ def transcribe_one(
     out_path = transcripts_dir / f"{video.stem}.json"
 
     if out_path.exists():
-        cached_provider = _cached_provider(out_path)
-        stale = provider_explicit and cached_provider and cached_provider != provider
-        if not stale:
+        if not is_transcript_stale(out_path, provider, provider_explicit):
             if verbose:
+                # Only read the file to explain the mismatch, never to decide it.
+                cached_provider = _cached_provider(out_path)
                 note = ""
                 if cached_provider and cached_provider != provider:
                     note = f" (from {cached_provider}; --provider {provider} to redo)"
                 print(f"cached: {out_path.name}{note}")
             return out_path
         if verbose:
-            print(f"  re-transcribing {video.name}: cached under {cached_provider}", flush=True)
+            print(f"  re-transcribing {video.name}: cached under "
+                  f"{_cached_provider(out_path)}", flush=True)
 
     if verbose:
         print(f"  extracting audio from {video.name}", flush=True)

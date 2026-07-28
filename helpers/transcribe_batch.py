@@ -24,7 +24,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from transcribe import _cached_provider, resolve_provider, transcribe_one
+from transcribe import is_transcript_stale, resolve_provider, transcribe_one
 
 
 VIDEO_EXTS = {".mp4", ".MP4", ".mov", ".MOV", ".mkv", ".MKV", ".avi", ".AVI", ".m4v"}
@@ -83,11 +83,7 @@ def main() -> None:
 
     def is_cached(video: Path) -> bool:
         path = edit_dir / "transcripts" / f"{video.stem}.json"
-        if not path.exists():
-            return False
-        # An explicit --provider re-does sources cached under a different one.
-        cached = _cached_provider(path)
-        return not (provider_explicit and cached and cached != provider)
+        return path.exists() and not is_transcript_stale(path, provider, provider_explicit)
 
     already_cached = [v for v in videos if is_cached(v)]
     pending = [v for v in videos if v not in already_cached]
