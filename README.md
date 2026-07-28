@@ -27,10 +27,10 @@ Paste into Claude Code, Codex, Hermes, Openclaw, or any agent with shell access:
 ```text
 Set up https://github.com/browser-use/video-use for me.
 
-Read install.md first to install this repo, wire up ffmpeg, register the skill with whichever agent you're running under, and set up the ElevenLabs API key — ask me to paste it when you need it. Then read SKILL.md for daily usage, and always read helpers/ because that's where the editing scripts live. After install, don't transcribe anything on your own — just tell me it's ready and wait for me to drop footage into a folder.
+Read install.md first to install this repo, wire up ffmpeg, register the skill with whichever agent you're running under, and set up the transcription API key — ask me to paste it when you need it. Then read SKILL.md for daily usage, and always read helpers/ because that's where the editing scripts live. After install, don't transcribe anything on your own — just tell me it's ready and wait for me to drop footage into a folder.
 ```
 
-The agent handles the clone, dependencies, skill registration, and prompts you once for your ElevenLabs API key (grab one at [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys)).
+The agent handles the clone, dependencies, skill registration, and prompts you once for a transcription key — either a free [Groq](https://console.groq.com/keys) key or a paid [ElevenLabs](https://elevenlabs.io/app/settings/api-keys) one.
 
 Then point your agent at a folder of raw takes:
 
@@ -63,10 +63,25 @@ uv sync                         # or: pip install -e .
 brew install ffmpeg             # required
 brew install yt-dlp             # optional, for downloading online sources
 
-# 3. Add your ElevenLabs API key
+# 3. Add a transcription API key
 cp .env.example .env
-$EDITOR .env                    # ELEVENLABS_API_KEY=...
+$EDITOR .env                    # GROQ_API_KEY=... (free) or ELEVENLABS_API_KEY=...
 ```
+
+## Transcription providers
+
+One key is enough. `transcribe.py` picks Groq when `GROQ_API_KEY` is set and falls back to ElevenLabs; `--provider groq|elevenlabs` overrides.
+
+| | Groq Whisper (`whisper-large-v3-turbo`) | ElevenLabs Scribe |
+|---|---|---|
+| Cost | free | paid |
+| Word-level timestamps | yes | yes |
+| Filler words (`um`, `uh`, false starts) | kept | kept |
+| Speaker diarization | **no** | yes |
+| Audio events (`(laughter)`, `(applause)`) | **no** | yes |
+| Upload cap | 25 MB — about 25 min per take | effectively none |
+
+Use Groq for single-speaker footage, which is most of it. Reach for ElevenLabs when you need speaker labels (interviews, panels) or audio-event beats, or when a single take runs long enough to blow the size cap.
 
 ## How it works
 
@@ -76,7 +91,7 @@ The LLM never watches the video. It **reads** it — through two layers that tog
   <img src="static/timeline-view.svg" alt="timeline_view composite — filmstrip + speaker track + waveform + word labels + silence-gap cut candidates" width="100%">
 </p>
 
-**Layer 1 — Audio transcript (always loaded).** One ElevenLabs Scribe call per source gives word-level timestamps, speaker diarization, and audio events (`(laughter)`, `(applause)`, `(sigh)`). All takes pack into a single ~12KB `takes_packed.md` — the LLM's primary reading view.
+**Layer 1 — Audio transcript (always loaded).** One transcription call per source gives word-level timestamps — plus speaker diarization and audio events (`(laughter)`, `(applause)`, `(sigh)`) on ElevenLabs. All takes pack into a single ~12KB `takes_packed.md` — the LLM's primary reading view.
 
 ```
 ## C0103  (duration: 43.0s, 8 phrases)

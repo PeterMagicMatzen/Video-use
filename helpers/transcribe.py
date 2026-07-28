@@ -1,8 +1,15 @@
-"""Transcribe a video with ElevenLabs Scribe.
+"""Transcribe a video with Groq Whisper (free) or ElevenLabs Scribe.
 
-Extracts mono 16kHz audio via ffmpeg, uploads to Scribe with verbatim +
-diarize + audio events + word-level timestamps, writes the full response
-to <edit_dir>/transcripts/<video_stem>.json.
+Extracts mono 16kHz audio via ffmpeg, uploads it for word-level timestamps,
+writes the response to <edit_dir>/transcripts/<video_stem>.json.
+
+Providers:
+  groq        whisper-large-v3-turbo. Free, fast, keeps fillers. No diarization,
+              no audio events. 25 MB upload cap (~25 min of 16k mono FLAC).
+  elevenlabs  Scribe. Paid. Adds diarization + audio events, no size cap worth
+              worrying about. Required for multi-speaker footage.
+
+Default is `auto`: Groq if GROQ_API_KEY resolves, otherwise ElevenLabs.
 
 Cached: if the output file already exists, the upload is skipped.
 
@@ -11,6 +18,7 @@ Usage:
     python helpers/transcribe.py <video_path> --edit-dir /custom/edit
     python helpers/transcribe.py <video_path> --language en
     python helpers/transcribe.py <video_path> --num-speakers 2
+    python helpers/transcribe.py <video_path> --provider elevenlabs
 """
 
 from __future__ import annotations
@@ -30,14 +38,20 @@ import requests
 SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
+GROQ_MAX_UPLOAD_MB = 25.0  # free tier; Groq's dev tier allows 100
+
+PROVIDER_KEYS = {"groq": "GROQ_API_KEY", "elevenlabs": "ELEVENLABS_API_KEY"}
 
 
 def _read_env_var(name: str) -> str:
-    """Look up a var in the repo .env, ~/.agent-ops/env, then the environment."""
+    """Look up a var in the repo .env, the cwd .env, then the environment.
+
+    Blank values are skipped, so a placeholder line like `ELEVENLABS_API_KEY=`
+    in a freshly copied .env doesn't shadow a real key set elsewhere.
+    """
     candidates = [
         Path(__file__).resolve().parent.parent / ".env",
         Path(".env"),
-        Path.home() / ".agent-ops" / "env",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -47,25 +61,53 @@ def _read_env_var(name: str) -> str:
                     continue
                 k, v = line.split("=", 1)
                 if k.strip().removeprefix("export ").strip() == name:
-                    return v.strip().strip('"').strip("'")
+                    v = v.strip().strip('"').strip("'")
+                    if v:
+                        return v
     return os.environ.get(name, "")
 
 
-def load_provider_key() -> tuple[str, str]:
-    """Prefer free Groq Whisper (word timestamps); fall back to ElevenLabs."""
-    groq = _read_env_var("GROQ_API_KEY")
-    if groq:
-        return "groq", groq
-    eleven = _read_env_var("ELEVENLABS_API_KEY")
-    if eleven:
-        return "elevenlabs", eleven
-    sys.exit("No transcription key: set GROQ_API_KEY or ELEVENLABS_API_KEY in .env")
+def load_provider_key(preferred: str = "auto") -> tuple[str, str]:
+    """Resolve (provider, api_key). `preferred` is 'auto', 'groq' or 'elevenlabs'.
+
+    'auto' prefers free Groq Whisper and falls back to ElevenLabs Scribe.
+    """
+    if preferred in PROVIDER_KEYS:
+        key = _read_env_var(PROVIDER_KEYS[preferred])
+        if not key:
+            sys.exit(f"--provider {preferred} needs {PROVIDER_KEYS[preferred]} in .env or environment")
+        return preferred, key
+
+    for provider, env_name in PROVIDER_KEYS.items():
+        key = _read_env_var(env_name)
+        if key:
+            return provider, key
+    sys.exit("No transcription key: set GROQ_API_KEY (free) or ELEVENLABS_API_KEY in .env")
+
+
+def resolve_provider(preferred: str, num_speakers: int | None) -> tuple[str, str]:
+    """load_provider_key, but route diarization requests away from Groq."""
+    if preferred == "auto" and num_speakers and _read_env_var("ELEVENLABS_API_KEY"):
+        preferred = "elevenlabs"
+
+    provider, api_key = load_provider_key(preferred)
+    if num_speakers and provider == "groq":
+        print(
+            "warning: Groq Whisper has no diarization — --num-speakers ignored, "
+            "no speaker_id in the transcript",
+            file=sys.stderr,
+        )
+    return provider, api_key
 
 
 def extract_audio(video_path: Path, dest: Path) -> None:
+    """Mono 16 kHz audio. Codec follows the destination suffix — FLAC for Groq
+    (lossless, smaller than WAV, and what Groq documents as the preferred
+    upload format), plain WAV for Scribe."""
+    codec = "flac" if dest.suffix == ".flac" else "pcm_s16le"
     cmd = [
         "ffmpeg", "-y", "-i", str(video_path),
-        "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+        "-vn", "-ac", "1", "-ar", "16000", "-c:a", codec,
         str(dest),
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -103,14 +145,52 @@ def call_scribe(
     return resp.json()
 
 
+def _normalize_groq_words(raw_words: list[dict]) -> list[dict]:
+    """Map Whisper words onto the Scribe entry shape the rest of video-use reads:
+    {text, start, end, type, speaker_id}.
+
+    Whisper timestamps occasionally run backwards (a word starting before the
+    previous one ended). Cuts snap to these boundaries, so clamp the sequence
+    monotonic rather than let a negative span reach the EDL. Real silences are
+    untouched — clamping only moves a start that was already behind.
+    """
+    words: list[dict] = []
+    prev_end = 0.0
+    for w in raw_words:
+        text = (w.get("word") or "").strip()
+        if not text:
+            continue
+        start = max(float(w.get("start", prev_end)), prev_end)
+        end = max(float(w.get("end", start)), start)
+        words.append({
+            "text": text,
+            "start": start,
+            "end": end,
+            "type": "word",
+            "speaker_id": None,
+        })
+        prev_end = end
+    return words
+
+
 def call_groq(
     audio_path: Path,
     api_key: str,
     language: str | None = None,
 ) -> dict:
-    """Free Whisper transcription via Groq. Maps to the Scribe payload shape
-    the rest of video-use consumes (words: [{text,start,end,type,speaker_id}]).
-    No diarization/audio-events (fine for single-speaker footage)."""
+    """Free Whisper transcription via Groq. Returns the Scribe payload shape.
+
+    No diarization and no audio events — fine for single-speaker footage, but
+    multi-speaker work wants ElevenLabs.
+    """
+    size_mb = audio_path.stat().st_size / (1024 * 1024)
+    if size_mb > GROQ_MAX_UPLOAD_MB:
+        raise RuntimeError(
+            f"{audio_path.stem}: {size_mb:.1f} MB of audio exceeds Groq's "
+            f"{GROQ_MAX_UPLOAD_MB:.0f} MB upload cap. Use --provider elevenlabs, "
+            f"or split the source into shorter takes."
+        )
+
     data: dict[str, str] = {
         "model": GROQ_MODEL,
         "response_format": "verbose_json",
@@ -123,7 +203,7 @@ def call_groq(
         resp = requests.post(
             GROQ_URL,
             headers={"Authorization": f"Bearer {api_key}"},
-            files={"file": (audio_path.name, f, "audio/wav")},
+            files={"file": (audio_path.name, f, "audio/flac")},
             data=data,
             timeout=1800,
         )
@@ -132,20 +212,10 @@ def call_groq(
         raise RuntimeError(f"Groq returned {resp.status_code}: {resp.text[:500]}")
 
     raw = resp.json()
-    words = [
-        {
-            "text": w.get("word", ""),
-            "start": w.get("start", 0.0),
-            "end": w.get("end", 0.0),
-            "type": "word",
-            "speaker_id": None,
-        }
-        for w in raw.get("words", [])
-    ]
     return {
         "language_code": raw.get("language", language or ""),
         "text": raw.get("text", ""),
-        "words": words,
+        "words": _normalize_groq_words(raw.get("words", [])),
     }
 
 
@@ -176,11 +246,12 @@ def transcribe_one(
 
     t0 = time.time()
     with tempfile.TemporaryDirectory() as tmp:
-        audio = Path(tmp) / f"{video.stem}.wav"
+        suffix = ".flac" if provider == "groq" else ".wav"
+        audio = Path(tmp) / f"{video.stem}{suffix}"
         extract_audio(video, audio)
         size_mb = audio.stat().st_size / (1024 * 1024)
         if verbose:
-            print(f"  uploading {video.stem}.wav ({size_mb:.1f} MB)", flush=True)
+            print(f"  uploading {audio.name} ({size_mb:.1f} MB) to {provider}", flush=True)
         if provider == "groq":
             payload = call_groq(audio, api_key, language)
         else:
@@ -199,7 +270,7 @@ def transcribe_one(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Transcribe a video with ElevenLabs Scribe")
+    ap = argparse.ArgumentParser(description="Transcribe a video with Groq Whisper or ElevenLabs Scribe")
     ap.add_argument("video", type=Path, help="Path to video file")
     ap.add_argument(
         "--edit-dir",
@@ -217,7 +288,13 @@ def main() -> None:
         "--num-speakers",
         type=int,
         default=None,
-        help="Optional number of speakers when known. Improves diarization accuracy.",
+        help="Optional number of speakers when known. Improves diarization accuracy (ElevenLabs only).",
+    )
+    ap.add_argument(
+        "--provider",
+        choices=["auto", "groq", "elevenlabs"],
+        default="auto",
+        help="Transcription backend. Default auto: free Groq Whisper, else ElevenLabs Scribe.",
     )
     args = ap.parse_args()
 
@@ -226,7 +303,7 @@ def main() -> None:
         sys.exit(f"video not found: {video}")
 
     edit_dir = (args.edit_dir or (video.parent / "edit")).resolve()
-    provider, api_key = load_provider_key()
+    provider, api_key = resolve_provider(args.provider, args.num_speakers)
 
     transcribe_one(
         video=video,

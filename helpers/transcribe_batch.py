@@ -1,7 +1,8 @@
 """Batch-transcribe every video in a directory with 4 parallel workers.
 
-Walks <videos_dir> for common video extensions, runs ElevenLabs Scribe on
-each, writes transcripts to <videos_dir>/edit/transcripts/<name>.json.
+Walks <videos_dir> for common video extensions, transcribes each via Groq
+Whisper or ElevenLabs Scribe, writes transcripts to
+<videos_dir>/edit/transcripts/<name>.json.
 
 Cached per-file: any source that already has a transcript is skipped.
 
@@ -10,6 +11,7 @@ Usage:
     python helpers/transcribe_batch.py <videos_dir> --workers 4
     python helpers/transcribe_batch.py <videos_dir> --num-speakers 2
     python helpers/transcribe_batch.py <videos_dir> --edit-dir /custom/edit
+    python helpers/transcribe_batch.py <videos_dir> --provider elevenlabs
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from transcribe import load_provider_key, transcribe_one
+from transcribe import resolve_provider, transcribe_one
 
 
 VIDEO_EXTS = {".mp4", ".MP4", ".mov", ".MOV", ".mkv", ".MKV", ".avi", ".AVI", ".m4v"}
@@ -54,7 +56,13 @@ def main() -> None:
         "--num-speakers",
         type=int,
         default=None,
-        help="Optional number of speakers. Improves diarization when known.",
+        help="Optional number of speakers. Improves diarization when known (ElevenLabs only).",
+    )
+    ap.add_argument(
+        "--provider",
+        choices=["auto", "groq", "elevenlabs"],
+        default="auto",
+        help="Transcription backend. Default auto: free Groq Whisper, else ElevenLabs Scribe.",
     )
     args = ap.parse_args()
 
@@ -77,7 +85,7 @@ def main() -> None:
         print("nothing to do")
         return
 
-    provider, api_key = load_provider_key()
+    provider, api_key = resolve_provider(args.provider, args.num_speakers)
 
     print(f"transcribing {len(pending)} files with {args.workers} parallel workers ({provider})")
     t0 = time.time()
