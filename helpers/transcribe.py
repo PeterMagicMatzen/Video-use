@@ -28,22 +28,38 @@ import requests
 
 
 SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODEL = "whisper-large-v3-turbo"
 
 
-def load_api_key() -> str:
-    for candidate in [Path(__file__).resolve().parent.parent / ".env", Path(".env")]:
+def _read_env_var(name: str) -> str:
+    """Look up a var in the repo .env, ~/.agent-ops/env, then the environment."""
+    candidates = [
+        Path(__file__).resolve().parent.parent / ".env",
+        Path(".env"),
+        Path.home() / ".agent-ops" / "env",
+    ]
+    for candidate in candidates:
         if candidate.exists():
             for line in candidate.read_text().splitlines():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, v = line.split("=", 1)
-                if k.strip() == "ELEVENLABS_API_KEY":
+                if k.strip().removeprefix("export ").strip() == name:
                     return v.strip().strip('"').strip("'")
-    v = os.environ.get("ELEVENLABS_API_KEY", "")
-    if not v:
-        sys.exit("ELEVENLABS_API_KEY not found in .env or environment")
-    return v
+    return os.environ.get(name, "")
+
+
+def load_provider_key() -> tuple[str, str]:
+    """Prefer free Groq Whisper (word timestamps); fall back to ElevenLabs."""
+    groq = _read_env_var("GROQ_API_KEY")
+    if groq:
+        return "groq", groq
+    eleven = _read_env_var("ELEVENLABS_API_KEY")
+    if eleven:
+        return "elevenlabs", eleven
+    sys.exit("No transcription key: set GROQ_API_KEY or ELEVENLABS_API_KEY in .env")
 
 
 def extract_audio(video_path: Path, dest: Path) -> None:
@@ -87,6 +103,52 @@ def call_scribe(
     return resp.json()
 
 
+def call_groq(
+    audio_path: Path,
+    api_key: str,
+    language: str | None = None,
+) -> dict:
+    """Free Whisper transcription via Groq. Maps to the Scribe payload shape
+    the rest of video-use consumes (words: [{text,start,end,type,speaker_id}]).
+    No diarization/audio-events (fine for single-speaker footage)."""
+    data: dict[str, str] = {
+        "model": GROQ_MODEL,
+        "response_format": "verbose_json",
+        "timestamp_granularities[]": "word",
+    }
+    if language:
+        data["language"] = language
+
+    with open(audio_path, "rb") as f:
+        resp = requests.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            files={"file": (audio_path.name, f, "audio/wav")},
+            data=data,
+            timeout=1800,
+        )
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Groq returned {resp.status_code}: {resp.text[:500]}")
+
+    raw = resp.json()
+    words = [
+        {
+            "text": w.get("word", ""),
+            "start": w.get("start", 0.0),
+            "end": w.get("end", 0.0),
+            "type": "word",
+            "speaker_id": None,
+        }
+        for w in raw.get("words", [])
+    ]
+    return {
+        "language_code": raw.get("language", language or ""),
+        "text": raw.get("text", ""),
+        "words": words,
+    }
+
+
 def transcribe_one(
     video: Path,
     edit_dir: Path,
@@ -94,6 +156,7 @@ def transcribe_one(
     language: str | None = None,
     num_speakers: int | None = None,
     verbose: bool = True,
+    provider: str = "groq",
 ) -> Path:
     """Transcribe a single video. Returns path to transcript JSON.
 
@@ -118,7 +181,10 @@ def transcribe_one(
         size_mb = audio.stat().st_size / (1024 * 1024)
         if verbose:
             print(f"  uploading {video.stem}.wav ({size_mb:.1f} MB)", flush=True)
-        payload = call_scribe(audio, api_key, language, num_speakers)
+        if provider == "groq":
+            payload = call_groq(audio, api_key, language)
+        else:
+            payload = call_scribe(audio, api_key, language, num_speakers)
 
     out_path.write_text(json.dumps(payload, indent=2))
     dt = time.time() - t0
@@ -160,7 +226,7 @@ def main() -> None:
         sys.exit(f"video not found: {video}")
 
     edit_dir = (args.edit_dir or (video.parent / "edit")).resolve()
-    api_key = load_api_key()
+    provider, api_key = load_provider_key()
 
     transcribe_one(
         video=video,
@@ -168,6 +234,7 @@ def main() -> None:
         api_key=api_key,
         language=args.language,
         num_speakers=args.num_speakers,
+        provider=provider,
     )
 
 
