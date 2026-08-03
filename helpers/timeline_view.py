@@ -118,7 +118,7 @@ def compute_envelope(video: Path, start: float, end: float, samples: int = 2000)
 def words_in_range(transcript_path: Path, start: float, end: float) -> list[dict]:
     if not transcript_path.exists():
         return []
-    data = json.loads(transcript_path.read_text())
+    data = json.loads(transcript_path.read_text(encoding="utf-8"))
     out: list[dict] = []
     for w in data.get("words", []):
         t = w.get("type", "word")
@@ -330,7 +330,20 @@ def render_timeline(
         print(f"saved: {out_path}  ({out_path.stat().st_size // 1024} KB)")
 
 
+def use_utf8_stdio() -> None:
+    """Print through UTF-8 rather than the locale codepage.
+
+    Windows picks the console codepage for stdout (cp1252 on a pt-BR machine),
+    so a progress line carrying a '→' — or an accented source filename — raises
+    UnicodeEncodeError and takes the whole script down. No-op elsewhere.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> None:
+    use_utf8_stdio()
     ap = argparse.ArgumentParser(description="Filmstrip + waveform composite for a video range")
     ap.add_argument("video", type=Path, nargs="?", help="Source video")
     ap.add_argument("start", type=float, nargs="?", help="Start time in seconds")

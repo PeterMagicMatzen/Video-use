@@ -33,7 +33,7 @@ SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 def load_api_key() -> str:
     for candidate in [Path(__file__).resolve().parent.parent / ".env", Path(".env")]:
         if candidate.exists():
-            for line in candidate.read_text().splitlines():
+            for line in candidate.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
@@ -120,7 +120,7 @@ def transcribe_one(
             print(f"  uploading {video.stem}.wav ({size_mb:.1f} MB)", flush=True)
         payload = call_scribe(audio, api_key, language, num_speakers)
 
-    out_path.write_text(json.dumps(payload, indent=2))
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     dt = time.time() - t0
 
     if verbose:
@@ -132,7 +132,20 @@ def transcribe_one(
     return out_path
 
 
+def use_utf8_stdio() -> None:
+    """Print through UTF-8 rather than the locale codepage.
+
+    Windows picks the console codepage for stdout (cp1252 on a pt-BR machine),
+    so a progress line carrying a '→' — or an accented source filename — raises
+    UnicodeEncodeError and takes the whole script down. No-op elsewhere.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> None:
+    use_utf8_stdio()
     ap = argparse.ArgumentParser(description="Transcribe a video with ElevenLabs Scribe")
     ap.add_argument("video", type=Path, help="Path to video file")
     ap.add_argument(
