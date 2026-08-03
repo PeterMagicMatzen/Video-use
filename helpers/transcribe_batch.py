@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from transcribe import load_api_key, transcribe_one
+from transcribe import load_api_key, transcribe_one, use_utf8_stdio
 
 
 VIDEO_EXTS = {".mp4", ".MP4", ".mov", ".MOV", ".mkv", ".MKV", ".avi", ".AVI", ".m4v"}
@@ -35,6 +35,7 @@ def find_videos(videos_dir: Path) -> list[Path]:
 
 
 def main() -> None:
+    use_utf8_stdio()
     ap = argparse.ArgumentParser(description="Parallel batch transcription of a videos directory")
     ap.add_argument("videos_dir", type=Path, help="Directory containing source videos")
     ap.add_argument(

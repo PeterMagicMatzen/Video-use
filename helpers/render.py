@@ -22,10 +22,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 try:
@@ -56,6 +60,18 @@ SUB_FORCE_STYLE = (
 )
 
 # -------- Helpers ------------------------------------------------------------
+
+
+def use_utf8_stdio() -> None:
+    """Print through UTF-8 rather than the locale codepage.
+
+    Windows picks the console codepage for stdout (cp1252 on a pt-BR machine),
+    so a progress line carrying a '→' — or an accented source filename — raises
+    UnicodeEncodeError and takes the whole render down. No-op elsewhere.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def run(cmd: list[str], quiet: bool = False) -> None:
@@ -90,6 +106,55 @@ def resolve_path(maybe_path: str, base: Path) -> Path:
     if p.is_absolute():
         return p
     return (base / p).resolve()
+
+
+def escape_filter_path(path: Path) -> str:
+    """Quote and escape a path for use *inside* an ffmpeg filtergraph.
+
+    Filenames passed as argv (`-i`, output paths) need none of this — the OS
+    hands those to ffmpeg verbatim. Filenames embedded in a filtergraph go
+    through ffmpeg's own parser first, which on Windows means two traps:
+
+      - Backslash is the filtergraph escape character, so a raw
+        `C:\\Users\\me\\master.srt` reaches the filter as `C:Usersmemaster.srt`
+        and it reports "Unable to open". Forward slashes work fine on Windows.
+      - `:` separates filter options, so the drive letter must be escaped even
+        inside quotes.
+
+    Non-ASCII path components (accents, CJK, Cyrillic) need no special handling
+    once the above are fixed — ffmpeg opens them correctly.
+    """
+    escaped = str(path).replace("\\", "/").replace(":", r"\:")
+    return f"'{escaped}'"
+
+
+@contextlib.contextmanager
+def filtergraph_safe_path(path: Path) -> Iterator[Path]:
+    """Yield a path the filtergraph can actually reference, staging a copy if not.
+
+    Accents, CJK and Cyrillic all survive a filtergraph fine once the path is
+    escaped by `escape_filter_path` — they need no copy. A literal `'` is the one
+    character ffmpeg's two-level parser cannot carry in a filename: every quoting
+    and escaping form of it fails to initialize the filter (checked against
+    ffmpeg 8.1.2). For that case only, stage a copy under a temp directory and
+    point the filter at that instead.
+    """
+    if "'" not in str(path):
+        yield path
+        return
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="video_use_"))
+    try:
+        staged = tmp_dir / path.name.replace("'", "_")
+        shutil.copyfile(path, staged)
+        if "'" in str(staged):
+            print(
+                f"warning: temp directory {tmp_dir} also contains a quote — "
+                f"ffmpeg may not be able to open {path.name}"
+            )
+        yield staged
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # -------- HDR → SDR tone mapping (HLG / PQ sources) --------------------------
@@ -265,21 +330,47 @@ def extract_all_segments(
 
 
 def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -> None:
-    """Lossless concat via the concat demuxer. No re-encode."""
+    """Lossless concat via the concat demuxer. No re-encode.
+
+    The concat list is read by ffmpeg as UTF-8, so it must be *written* as UTF-8:
+    `write_text()` with no encoding uses the locale codepage, and on a non-English
+    Windows (cp1252 on pt-BR) an accented footage directory such as
+    "Gravações de Tela" lands in the list as `Grava\\347\\365es`. Every entry then
+    resolves to a file that does not exist and ffmpeg exits -22 / EINVAL.
+
+    Belt and braces: the entries are written relative to `edit_dir` and ffmpeg is
+    run with `cwd=edit_dir`, so non-ASCII characters stay out of the list file
+    entirely. Segment paths outside `edit_dir` fall back to an absolute entry,
+    which is still safe now that the file is UTF-8.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     concat_list = edit_dir / "_concat.txt"
-    concat_list.write_text("".join(f"file '{p.resolve()}'\n" for p in segment_paths))
+
+    entries: list[str] = []
+    for p in segment_paths:
+        try:
+            rel = p.resolve().relative_to(edit_dir.resolve())
+        except ValueError:
+            entries.append(p.resolve().as_posix())
+        else:
+            entries.append(rel.as_posix())
+    concat_list.write_text(
+        "".join(f"file '{e}'\n" for e in entries), encoding="utf-8"
+    )
 
     cmd = [
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0",
-        "-i", str(concat_list),
+        "-i", concat_list.name,
         "-c", "copy",
         "-movflags", "+faststart",
-        str(out_path),
+        str(out_path.resolve()),
     ]
     print(f"concat → {out_path.name}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    subprocess.run(
+        cmd, check=True, cwd=str(edit_dir),
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    )
     concat_list.unlink(missing_ok=True)
 
 
@@ -337,7 +428,7 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
             seg_offset += seg_duration
             continue
 
-        transcript = json.loads(tr_path.read_text())
+        transcript = json.loads(tr_path.read_text(encoding="utf-8"))
         words_in_seg = _words_in_range(transcript, seg_start, seg_end)
 
         # Group into 2-word chunks, break on punctuation
@@ -380,7 +471,9 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
         lines.append(f"{_srt_timestamp(a)} --> {_srt_timestamp(b)}")
         lines.append(t)
         lines.append("")
-    out_path.write_text("\n".join(lines))
+    # UTF-8, always: libass reads the SRT as UTF-8, and captions routinely carry
+    # non-ASCII text (accents, dashes, quotes) even when the paths are ASCII.
+    out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"master SRT → {out_path.name} ({len(entries)} cues)")
 
 
@@ -535,44 +628,51 @@ def build_final_composite(
         )
         current = next_label
 
-    # Subtitles LAST — Rule 1
-    if has_subs:
-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
-        filter_parts.append(
-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
-        )
-        out_label = "[outv]"
-    else:
-        # Rename the last overlay output to [outv] for consistency
-        if has_overlays:
-            filter_parts.append(f"{current}null[outv]")
+    # The staged subtitle copy (if one is needed) has to outlive the ffmpeg run,
+    # so the whole command is built and run inside the stack.
+    with contextlib.ExitStack() as stack:
+        # Subtitles LAST — Rule 1
+        if has_subs:
+            subs_file = stack.enter_context(
+                filtergraph_safe_path(subtitles_path.resolve())
+            )
+            subs_arg = escape_filter_path(subs_file)
+            filter_parts.append(
+                f"{current}subtitles={subs_arg}:force_style='{SUB_FORCE_STYLE}'[outv]"
+            )
             out_label = "[outv]"
         else:
-            out_label = "[0:v]"
+            # Rename the last overlay output to [outv] for consistency
+            if has_overlays:
+                filter_parts.append(f"{current}null[outv]")
+                out_label = "[outv]"
+            else:
+                out_label = "[0:v]"
 
-    filter_complex = ";".join(filter_parts)
+        filter_complex = ";".join(filter_parts)
 
-    cmd = [
-        "ffmpeg", "-y",
-        *inputs,
-        "-filter_complex", filter_complex,
-        "-map", out_label,
-        "-map", "0:a",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
-        "-movflags", "+faststart",
-        str(out_path),
-    ]
-    print(f"compositing → {out_path.name}")
-    print(f"  overlays: {len(overlays)}, subtitles: {'yes' if has_subs else 'no'}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        cmd = [
+            "ffmpeg", "-y",
+            *inputs,
+            "-filter_complex", filter_complex,
+            "-map", out_label,
+            "-map", "0:a",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
+        print(f"compositing → {out_path.name}")
+        print(f"  overlays: {len(overlays)}, subtitles: {'yes' if has_subs else 'no'}")
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
 # -------- Main ---------------------------------------------------------------
 
 
 def main() -> None:
+    use_utf8_stdio()
     ap = argparse.ArgumentParser(description="Render a video from an EDL")
     ap.add_argument("edl", type=Path, help="Path to edl.json")
     ap.add_argument("-o", "--output", type=Path, required=True, help="Output video path")
@@ -607,7 +707,7 @@ def main() -> None:
     if not edl_path.exists():
         sys.exit(f"edl not found: {edl_path}")
 
-    edl = json.loads(edl_path.read_text())
+    edl = json.loads(edl_path.read_text(encoding="utf-8"))
     edit_dir = edl_path.parent
     out_path = args.output.resolve()
 

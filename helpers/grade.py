@@ -101,12 +101,18 @@ def _sample_frame_stats(
         metadata_path = f.name
 
     try:
+        # `file=` sits inside a filtergraph, so the path needs ffmpeg's escaping,
+        # not the OS's: on Windows a bare `C:\Users\...` fails to parse outright
+        # ("Error parsing a filter description"), which took auto-grade down on
+        # every Windows machine regardless of accents. Quote it, use forward
+        # slashes, and escape the drive colon.
+        meta_arg = "'" + metadata_path.replace("\\", "/").replace(":", r"\:") + "'"
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-nostats",
             "-ss", f"{start:.3f}",
             "-i", str(video),
             "-t", f"{duration:.3f}",
-            "-vf", f"fps={fps:.2f},signalstats,metadata=print:file={metadata_path}",
+            "-vf", f"fps={fps:.2f},signalstats,metadata=print:file={meta_arg}",
             "-f", "null", "-",
         ]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -127,7 +133,7 @@ def _sample_frame_stats(
             except (ValueError, IndexError):
                 return None
 
-        with open(metadata_path) as f:
+        with open(metadata_path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if "lavfi.signalstats.YBITDEPTH" in line:
@@ -291,7 +297,20 @@ def apply_grade(input_path: Path, output_path: Path, filter_string: str) -> None
     subprocess.run(cmd, check=True)
 
 
+def use_utf8_stdio() -> None:
+    """Print through UTF-8 rather than the locale codepage.
+
+    Windows picks the console codepage for stdout (cp1252 on a pt-BR machine),
+    so a progress line carrying a '→' — or an accented source filename — raises
+    UnicodeEncodeError and takes the whole script down. No-op elsewhere.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> None:
+    use_utf8_stdio()
     ap = argparse.ArgumentParser(description="Apply a color grade via ffmpeg filter chain")
     ap.add_argument("input", type=Path, nargs="?", help="Input video")
     ap.add_argument("-o", "--output", type=Path, help="Output video")
