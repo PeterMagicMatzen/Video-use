@@ -58,7 +58,13 @@ SUB_FORCE_STYLE_SUFFIX = (
 
 def build_subtitle_force_style(font_name: str | None = None) -> str:
     """Build the proven subtitle style with an optional font override."""
-    return f"FontName={font_name or 'Helvetica'},{SUB_FORCE_STYLE_SUFFIX}"
+    font_name = font_name or "Helvetica"
+    if re.search(r"[,'\\\x00-\x1f\x7f]", font_name):
+        raise ValueError(
+            "subtitle_font must not contain commas, apostrophes, backslashes, "
+            "or control characters"
+        )
+    return f"FontName={font_name},{SUB_FORCE_STYLE_SUFFIX}"
 
 
 SUB_FORCE_STYLE = build_subtitle_force_style()

@@ -219,6 +219,12 @@ class SubtitleStyleTests(unittest.TestCase):
             style, render.SUB_FORCE_STYLE.replace("Helvetica", "Heiti SC", 1)
         )
 
+    def test_font_override_rejects_force_style_delimiters(self) -> None:
+        for font_name in ("Helvetica,FontSize=72", "Reader's Font", r"Font\Name"):
+            with self.subTest(font_name=font_name):
+                with self.assertRaisesRegex(ValueError, "subtitle_font"):
+                    render.build_subtitle_force_style(font_name)
+
     def test_main_passes_edl_font_override_to_compositing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)
