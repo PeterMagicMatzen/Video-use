@@ -671,6 +671,7 @@ def main() -> None:
     # without libass fails immediately. Missing configured files keep their
     # existing warning-and-skip behavior.
     subs_path: Path | None = None
+    subtitle_force_style = SUB_FORCE_STYLE
     if not args.no_subtitles:
         if args.build_subtitles:
             require_subtitles_filter()
@@ -681,6 +682,13 @@ def main() -> None:
             else:
                 print(f"warning: subtitles path in EDL does not exist: {subs_path}")
                 subs_path = None
+        if args.build_subtitles or subs_path is not None:
+            try:
+                subtitle_force_style = build_subtitle_force_style(
+                    edl.get("subtitle_font")
+                )
+            except ValueError as exc:
+                raise SystemExit(f"invalid subtitle_font in edl: {exc}") from None
 
     # 1. Extract per-segment (auto-grade per range if EDL grade is "auto")
     segment_paths = extract_all_segments(
@@ -704,16 +712,6 @@ def main() -> None:
 
     # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
     overlays = edl.get("overlays") or []
-    # Only validate the font override when subtitles are actually burned in, so
-    # --no-subtitles (or a missing EDL subtitles path) never fails on a field
-    # that will not be used.
-    if subs_path is None:
-        subtitle_force_style = SUB_FORCE_STYLE
-    else:
-        try:
-            subtitle_force_style = build_subtitle_force_style(edl.get("subtitle_font"))
-        except ValueError as exc:
-            raise SystemExit(f"invalid subtitle_font in edl: {exc}") from None
     if args.no_loudnorm:
         # Composite directly to final output
         build_final_composite(
