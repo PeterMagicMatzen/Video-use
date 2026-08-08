@@ -704,7 +704,16 @@ def main() -> None:
 
     # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
     overlays = edl.get("overlays") or []
-    subtitle_force_style = build_subtitle_force_style(edl.get("subtitle_font"))
+    # Only validate the font override when subtitles are actually burned in, so
+    # --no-subtitles (or a missing EDL subtitles path) never fails on a field
+    # that will not be used.
+    if subs_path is None:
+        subtitle_force_style = SUB_FORCE_STYLE
+    else:
+        try:
+            subtitle_force_style = build_subtitle_force_style(edl.get("subtitle_font"))
+        except ValueError as exc:
+            raise SystemExit(f"invalid subtitle_font in edl: {exc}") from None
     if args.no_loudnorm:
         # Composite directly to final output
         build_final_composite(
