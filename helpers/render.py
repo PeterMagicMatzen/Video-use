@@ -157,6 +157,7 @@ def extract_segment(
     out_path: Path,
     preview: bool = False,
     draft: bool = False,
+    fps: int = 24,
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -203,7 +204,7 @@ def extract_segment(
         "-vf", vf,
         "-af", af,
         "-c:v", "libx264", "-preset", preset, "-crf", crf,
-        "-pix_fmt", "yuv420p", "-r", "24",
+        "-pix_fmt", "yuv420p", "-r", str(fps),
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
         "-movflags", "+faststart",
         str(out_path),
@@ -216,6 +217,7 @@ def extract_all_segments(
     edit_dir: Path,
     preview: bool,
     draft: bool = False,
+    fps: int = 24,
 ) -> list[Path]:
     """Extract every EDL range into edit_dir/clips_graded/seg_NN.mp4.
     Returns the ordered list of segment paths.
@@ -255,7 +257,7 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft)
+        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft, fps=fps)
         seg_paths.append(out_path)
 
     return seg_paths
@@ -587,6 +589,12 @@ def main() -> None:
         help="Draft mode: 720p, ultrafast, CRF 28 — cut-point verification only.",
     )
     ap.add_argument(
+        "--fps",
+        type=int,
+        default=24,
+        help="Output frame rate for segment extraction (default: 24).",
+    )
+    ap.add_argument(
         "--build-subtitles",
         action="store_true",
         help="Build master.srt from transcripts + EDL offsets before compositing",
@@ -613,7 +621,7 @@ def main() -> None:
 
     # 1. Extract per-segment (auto-grade per range if EDL grade is "auto")
     segment_paths = extract_all_segments(
-        edl, edit_dir, preview=args.preview, draft=args.draft
+        edl, edit_dir, preview=args.preview, draft=args.draft, fps=args.fps
     )
 
     # 2. Concat → base
