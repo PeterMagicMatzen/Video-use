@@ -4,9 +4,9 @@
 
 # video-use
 
-Introducing **video-use** — edit videos with Claude Code. 100% open source.
+Introducing **video-use** — edit videos with Grok, Claude Code, or any coding agent. 100% open source.
 
-Drop raw footage in a folder, chat with Claude Code, get `final.mp4` back. Works for any content — talking heads, montages, tutorials, travel, interviews — without presets or menus.
+Drop raw footage in a folder, chat with your agent, get `final.mp4` back. Works for any content — talking heads, montages, tutorials, travel, interviews — without presets or menus.
 
 Try video-use in [Browser Use Cloud](https://cloud.browser-use.com/v4?utm_campaign=video-use-use-in-cloud&utm_source=github).
 
@@ -22,21 +22,21 @@ Try video-use in [Browser Use Cloud](https://cloud.browser-use.com/v4?utm_campai
 
 ## Setup prompt
 
-Paste into Claude Code, Codex, Hermes, Openclaw, or any agent with shell access:
+Paste into Grok, Claude Code, Codex, Hermes, Openclaw, or any agent with shell access:
 
 ```text
 Set up https://github.com/browser-use/video-use for me.
 
-Read install.md first to install this repo, wire up ffmpeg, register the skill with whichever agent you're running under, and set up the ElevenLabs API key — ask me to paste it when you need it. Then read SKILL.md for daily usage, and always read helpers/ because that's where the editing scripts live. After install, don't transcribe anything on your own — just tell me it's ready and wait for me to drop footage into a folder.
+Read install.md first to install this repo, wire up ffmpeg, register the skill with whichever agent you're running under, and set up the xAI API key — ask me to paste it when you need it. Then read SKILL.md for daily usage, and always read helpers/ because that's where the editing scripts live. After install, don't transcribe anything on your own — just tell me it's ready and wait for me to drop footage into a folder.
 ```
 
-The agent handles the clone, dependencies, skill registration, and prompts you once for your ElevenLabs API key (grab one at [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys)).
+The agent handles the clone, dependencies, skill registration, and prompts you once for your xAI API key (grab one at [console.x.ai](https://console.x.ai/team/default/api-keys)).
 
 Then point your agent at a folder of raw takes:
 
 ```bash
 cd /path/to/your/videos
-claude    # or codex, hermes, etc.
+grok      # or claude, codex, hermes, etc.
 ```
 
 For always-on editing from your own VPS or Telegram, run the agent through [Browser Use Box](https://browser-use.com/bux). [Watch the 15-second demo](https://www.tiktok.com/@browser_use/video/7639824093721758989).
@@ -54,7 +54,8 @@ If you'd rather do it by hand:
 ```bash
 # 1. Clone and symlink into your agent's skills directory
 git clone https://github.com/browser-use/video-use ~/Developer/video-use
-ln -sfn ~/Developer/video-use ~/.claude/skills/video-use        # Claude Code
+ln -sfn ~/Developer/video-use ~/.grok/skills/video-use          # Grok
+# ln -sfn ~/Developer/video-use ~/.claude/skills/video-use      # Claude Code
 # ln -sfn ~/Developer/video-use ~/.codex/skills/video-use       # Codex
 
 # 2. Install deps
@@ -63,9 +64,9 @@ uv sync                         # or: pip install -e .
 brew install ffmpeg             # required
 brew install yt-dlp             # optional, for downloading online sources
 
-# 3. Add your ElevenLabs API key
+# 3. Add your xAI API key
 cp .env.example .env
-$EDITOR .env                    # ELEVENLABS_API_KEY=...
+$EDITOR .env                    # XAI_API_KEY=...
 ```
 
 ## How it works
@@ -76,7 +77,7 @@ The LLM never watches the video. It **reads** it — through two layers that tog
   <img src="static/timeline-view.svg" alt="timeline_view composite — filmstrip + speaker track + waveform + word labels + silence-gap cut candidates" width="100%">
 </p>
 
-**Layer 1 — Audio transcript (always loaded).** One ElevenLabs Scribe call per source gives word-level timestamps, speaker diarization, and audio events (`(laughter)`, `(applause)`, `(sigh)`). All takes pack into a single ~12KB `takes_packed.md` — the LLM's primary reading view.
+**Layer 1 — Audio transcript (always loaded).** One Grok STT call per source gives word-level timestamps, speaker diarization, and filler-word retention (ElevenLabs Scribe is still available via `--provider elevenlabs`). All takes pack into a single ~12KB `takes_packed.md` — the LLM's primary reading view.
 
 ```
 ## C0103  (duration: 43.0s, 8 phrases)
