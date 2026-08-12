@@ -1,12 +1,14 @@
 """Batch-transcribe every video in a directory with 4 parallel workers.
 
-Walks <videos_dir> for common video extensions, runs ElevenLabs Scribe on
-each, writes transcripts to <videos_dir>/edit/transcripts/<name>.json.
+Walks <videos_dir> for common video extensions, runs Grok STT (default) or
+ElevenLabs Scribe on each, writes transcripts to
+<videos_dir>/edit/transcripts/<name>.json.
 
 Cached per-file: any source that already has a transcript is skipped.
 
 Usage:
     python helpers/transcribe_batch.py <videos_dir>
+    python helpers/transcribe_batch.py <videos_dir> --provider grok
     python helpers/transcribe_batch.py <videos_dir> --workers 4
     python helpers/transcribe_batch.py <videos_dir> --num-speakers 2
     python helpers/transcribe_batch.py <videos_dir> --edit-dir /custom/edit
@@ -20,7 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from transcribe import load_api_key, transcribe_one
+from transcribe import PROVIDERS, load_api_key, resolve_provider, transcribe_one
 
 
 VIDEO_EXTS = {".mp4", ".MP4", ".mov", ".MOV", ".mkv", ".MKV", ".avi", ".AVI", ".m4v"}
@@ -45,6 +47,12 @@ def main() -> None:
     )
     ap.add_argument("--workers", type=int, default=4, help="Parallel workers (default: 4)")
     ap.add_argument(
+        "--provider",
+        choices=PROVIDERS,
+        default=None,
+        help="STT backend. Default: grok if XAI_API_KEY is set, else elevenlabs.",
+    )
+    ap.add_argument(
         "--language",
         type=str,
         default=None,
@@ -54,7 +62,7 @@ def main() -> None:
         "--num-speakers",
         type=int,
         default=None,
-        help="Optional number of speakers. Improves diarization when known.",
+        help="Optional speaker count (ElevenLabs only). Improves diarization when known.",
     )
     args = ap.parse_args()
 
@@ -77,9 +85,10 @@ def main() -> None:
         print("nothing to do")
         return
 
-    api_key = load_api_key()
+    provider = resolve_provider(args.provider)
+    api_key = load_api_key(provider)
 
-    print(f"transcribing {len(pending)} files with {args.workers} parallel workers")
+    print(f"transcribing {len(pending)} files with {args.workers} parallel workers [{provider}]")
     t0 = time.time()
 
     errors: list[tuple[Path, str]] = []
@@ -93,6 +102,7 @@ def main() -> None:
                 language=args.language,
                 num_speakers=args.num_speakers,
                 verbose=False,
+                provider=provider,
             ): v
             for v in pending
         }

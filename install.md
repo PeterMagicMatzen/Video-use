@@ -1,6 +1,6 @@
 ---
 name: video-use-install
-description: Install video-use into the current agent (Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + the ElevenLabs API key so the user can start editing immediately.
+description: Install video-use into the current agent (Grok, Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + an xAI or ElevenLabs API key so the user can start editing immediately.
 ---
 
 # video-use install
@@ -9,21 +9,21 @@ Use this file only for first-time install or reconnect. For daily editing, read 
 
 ## What you're doing
 
-You're setting up a conversation-driven video editor for the user. After install, the user drops raw footage into any folder, runs their agent (`claude`, `codex`, etc.) there, and says "edit these into a launch video." You do the rest by reading `SKILL.md`.
+You're setting up a conversation-driven video editor for the user. After install, the user drops raw footage into any folder, runs their agent (`grok`, `claude`, `codex`, etc.) there, and says "edit these into a launch video." You do the rest by reading `SKILL.md`.
 
 Three things must exist on this machine:
 
 1. The `video-use` repo cloned somewhere stable.
 2. `ffmpeg` on `$PATH` (plus optional `yt-dlp` for online sources).
-3. An ElevenLabs API key in `.env` at the repo root (for Scribe transcription).
+3. An `XAI_API_KEY` and/or `ELEVENLABS_API_KEY` in `.env` at the repo root. Either is enough. Existing ElevenLabs-only installs keep working.
 
 And one thing must be true about the current agent:
 
-4. It can discover `SKILL.md` — either via a global skills directory (`~/.claude/skills/`, `~/.codex/skills/`) or via a `CLAUDE.md` / system-prompt import.
+4. It can discover `SKILL.md` — either via a global skills directory (`~/.grok/skills/`, `~/.claude/skills/`, `~/.codex/skills/`) or via a system-prompt import.
 
 ## Install prompt contract
 
-- Do everything yourself. Only ask the user for things you cannot generate — the ElevenLabs API key, and confirmation before `brew install`.
+- Do everything yourself. Only ask the user for things you cannot generate — an xAI or ElevenLabs API key if neither is already set, and confirmation before `brew install`.
 - Prefer a stable clone path like `~/Developer/video-use` (not `/tmp`, not `~/Downloads`).
 - The skill references helpers by bare name (`transcribe.py`, `render.py`). That works because SKILL.md and `helpers/` ship together — keep them as siblings when you register the skill.
 - After install, verify by running one real command against one real file. Don't declare success on file-existence checks alone.
@@ -71,6 +71,13 @@ If `brew` / `apt` / `pacman` requires a sudo prompt, tell the user the exact com
 
 Figure out which agent you are running under, and register once. A symlink of the whole repo directory is the right shape — helpers/ needs to sit next to SKILL.md.
 
+- **Grok** (`~/.grok/` present):
+
+    ```bash
+    mkdir -p ~/.grok/skills
+    ln -sfn ~/Developer/video-use ~/.grok/skills/video-use
+    ```
+
 - **Claude Code** (`~/.claude/` present):
 
     ```bash
@@ -85,39 +92,53 @@ Figure out which agent you are running under, and register once. A symlink of th
     ln -sfn ~/Developer/video-use "${CODEX_HOME:-$HOME/.codex}/skills/video-use"
     ```
 
-- **Hermes / Openclaw / another agent with a skills directory**: symlink `~/Developer/video-use` into that agent's skills directory under the name `video-use`. If the agent has no skills directory, add a line to its system prompt / config pointing at `~/Developer/video-use/SKILL.md` (e.g. an `@~/Developer/video-use/SKILL.md` import in a `CLAUDE.md`-equivalent).
+- **Hermes / Openclaw / another agent with a skills directory**: symlink `~/Developer/video-use` into that agent's skills directory under the name `video-use`. If the agent has no skills directory, add a line to its system prompt / config pointing at `~/Developer/video-use/SKILL.md`.
 
-If you can't tell which agent you're in, ask the user once: "which agent am I running under — Claude Code, Codex, or something else?" Then pick the right target.
+If you can't tell which agent you're in, ask the user once: "which agent am I running under — Grok, Claude Code, Codex, or something else?" Then pick the right target.
 
-### 5. ElevenLabs API key
+### 5. Transcription API key (xAI or ElevenLabs)
 
-Scribe (ElevenLabs) does all transcription. Without a key, nothing transcribes.
+Either key works. An existing `ELEVENLABS_API_KEY`-only `.env` is a complete install — do not ask for xAI. If both are set, Grok STT is used unless the user passes `--provider elevenlabs`.
 
 1. Check existing state in this order and stop at the first hit:
 
     ```bash
-    # a) env var already exported
-    [ -n "$ELEVENLABS_API_KEY" ] && echo "env"
-    # b) .env at repo root already has it
-    grep -q '^ELEVENLABS_API_KEY=..' ~/Developer/video-use/.env 2>/dev/null && echo "dotenv"
+    [ -n "$XAI_API_KEY" ] && echo "xai-env"
+    grep -q '^XAI_API_KEY=..' ~/Developer/video-use/.env 2>/dev/null && echo "xai-dotenv"
+    [ -n "$ELEVENLABS_API_KEY" ] && echo "elevenlabs-env"
+    grep -q '^ELEVENLABS_API_KEY=..' ~/Developer/video-use/.env 2>/dev/null && echo "elevenlabs-dotenv"
     ```
 
-2. If neither is set, ask the user exactly once:
+2. If neither key is set, ask the user exactly once:
 
-    > I need an ElevenLabs API key for transcription (word-level timestamps, speaker diarization, filler tagging). Grab one at https://elevenlabs.io/app/settings/api-keys and paste it here — I'll write it to `~/Developer/video-use/.env`. Or if you already have it exported as `ELEVENLABS_API_KEY`, say "use env" and I'll skip.
+    > I need an API key for transcription (word-level timestamps, speaker diarization, filler tagging). xAI (`XAI_API_KEY`, https://console.x.ai/team/default/api-keys) or ElevenLabs (`ELEVENLABS_API_KEY`, https://elevenlabs.io/app/settings/api-keys) — either works. Paste one here and I'll write it to `~/Developer/video-use/.env`. Or if you already have it exported, say "use env" and I'll skip.
 
-    When the user pastes a key, write it to `~/Developer/video-use/.env`:
+    When the user pastes a key, upsert **only that variable**. Never truncate `.env` — an existing ElevenLabs line must survive adding xAI, and vice versa:
 
     ```bash
-    printf 'ELEVENLABS_API_KEY=%s\n' "$KEY" > ~/Developer/video-use/.env
-    chmod 600 ~/Developer/video-use/.env
+    ENV=~/Developer/video-use/.env
+    touch "$ENV"
+    # KEY_NAME is XAI_API_KEY or ELEVENLABS_API_KEY
+    if grep -q "^${KEY_NAME}=" "$ENV"; then
+      tmp=$(mktemp)
+      sed "s|^${KEY_NAME}=.*|${KEY_NAME}=${KEY}|" "$ENV" > "$tmp" && mv "$tmp" "$ENV"
+    else
+      printf '%s=%s\n' "$KEY_NAME" "$KEY" >> "$ENV"
+    fi
+    chmod 600 "$ENV"
     ```
 
     Never echo the key back in tool output. Never commit `.env`.
 
-3. Sanity check with a cheap, quota-free call:
+3. Sanity check with a cheap, quota-free call for whichever key you just wrote (or found):
 
     ```bash
+    # xAI
+    curl -s -o /dev/null -w '%{http_code}\n' \
+      -H "Authorization: Bearer $(sed -n 's/^XAI_API_KEY=//p' ~/Developer/video-use/.env)" \
+      https://api.x.ai/v1/models
+
+    # ElevenLabs
     curl -s -o /dev/null -w '%{http_code}\n' \
       -H "xi-api-key: $(sed -n 's/^ELEVENLABS_API_KEY=//p' ~/Developer/video-use/.env)" \
       https://api.elevenlabs.io/v1/user
@@ -141,7 +162,7 @@ Full transcription test is optional at install time — it burns Scribe credits.
 Tell the user, in one short message:
 
 - Where the skill is installed (`~/Developer/video-use`).
-- That they should `cd` into their footage folder and start their agent there (e.g. `claude`).
+- That they should `cd` into their footage folder and start their agent there (e.g. `grok`, `claude`).
 - That a good first message is: *"edit these into a launch video"* or *"inventory these takes and propose a strategy."*
 - That all outputs land in `<videos_dir>/edit/` — the repo stays clean.
 
@@ -158,5 +179,5 @@ Tell the user, in one short message:
 - `yt-dlp` is optional. Don't block install on it; install lazily the first time a user asks to pull from a URL.
 - Node.js/npm are only needed for HyperFrames or Remotion slots. HyperFrames currently requires Node.js 22+.
 - HyperFrames, Remotion, and Manim are optional animation engines. Don't install or prefer one globally during setup; pick the engine per animation slot in `SKILL.md`. HyperFrames can run through `npx --yes hyperframes ...` in the slot directory. Remotion can be scaffolded with `npx create-video@latest` or installed inside the slot before rendering.
-- Never run transcription as part of install verification unless the user explicitly asks — Scribe costs real money.
-- If the user is on Linux without a package manager Claude recognizes, print the manual `ffmpeg` install URL and wait rather than guessing.
+- Never run transcription as part of install verification unless the user explicitly asks — STT costs real money.
+- If the user is on Linux without a package manager the agent recognizes, print the manual `ffmpeg` install URL and wait rather than guessing.
