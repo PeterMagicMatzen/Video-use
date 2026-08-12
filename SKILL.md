@@ -59,7 +59,7 @@ The skill lives in `video-use/`. User footage lives wherever they put it. All se
 
 First-time install lives in `install.md` (clone, deps, ffmpeg, skill registration, API key). Don't re-run it every session; on cold start just verify:
 
-- `XAI_API_KEY` resolves — either in the environment or in `.env` at the video-use repo root. If missing, ask the user to paste one and write it to `.env` (never to the user's `<videos_dir>`). `ELEVENLABS_API_KEY` is an optional fallback (`--provider elevenlabs`).
+- `XAI_API_KEY` or `ELEVENLABS_API_KEY` resolves — environment or `.env` at the video-use repo root. Either is enough. If both are set, Grok STT is used unless you pass `--provider elevenlabs`. An existing ElevenLabs-only `.env` keeps working with no flags. If neither is set, ask the user to paste one and write it to `.env` (never to the user's `<videos_dir>`). Do not overwrite the other key if `.env` already has it.
 - `ffmpeg` + `ffprobe` on PATH.
 - Python deps installed (`uv sync` or `pip install -e .` inside the repo).
 - Node.js + npm available if the session needs HyperFrames or Remotion slots. HyperFrames currently requires Node.js 22+.
@@ -71,7 +71,7 @@ Helpers (`helpers/transcribe.py`, `helpers/render.py`, etc.) live alongside this
 
 ## Helpers
 
-- **`transcribe.py <video>`** — single-file Grok STT call (ElevenLabs Scribe via `--provider elevenlabs`). `--num-speakers N` optional (Scribe only). Cached.
+- **`transcribe.py <video>`** — single-file STT call. Auto: Grok if `XAI_API_KEY` is set, else ElevenLabs Scribe. Force with `--provider grok|elevenlabs`. `--num-speakers N` optional (Scribe only). Cached.
 - **`transcribe_batch.py <videos_dir>`** — 4-worker parallel transcription. Use for multi-take.
 - **`pack_transcripts.py --edit-dir <dir>`** — `transcripts/*.json` → `takes_packed.md` (phrase-level, break on silence ≥ 0.5s).
 - **`timeline_view.py <video> <start> <end>`** — filmstrip + waveform PNG. On-demand visual drill-down. **Not a scan tool** — use it at decision points, not constantly.

@@ -1,4 +1,8 @@
-"""Transcribe a video with Grok STT (default) or ElevenLabs Scribe.
+"""Transcribe a video with Grok STT or ElevenLabs Scribe.
+
+Accepts either XAI_API_KEY or ELEVENLABS_API_KEY. An existing ElevenLabs-only
+.env keeps working with no flags. If both keys are set, Grok STT is used
+unless you pass --provider elevenlabs.
 
 Extracts mono 16kHz audio via ffmpeg, uploads with diarization + word-level
 timestamps + filler-word retention, writes a Scribe-shaped transcript to
@@ -66,8 +70,8 @@ def resolve_provider(explicit: str | None) -> str:
     if _read_key("ELEVENLABS_API_KEY"):
         return "elevenlabs"
     sys.exit(
-        "XAI_API_KEY not found in .env or environment "
-        "(or set ELEVENLABS_API_KEY / --provider elevenlabs)"
+        "need XAI_API_KEY or ELEVENLABS_API_KEY in .env or the environment "
+        "(existing ElevenLabs-only setups keep working; pass --provider to force one)"
     )
 
 

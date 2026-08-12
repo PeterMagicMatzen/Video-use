@@ -1,6 +1,6 @@
 ---
 name: video-use-install
-description: Install video-use into the current agent (Grok, Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + the xAI API key so the user can start editing immediately.
+description: Install video-use into the current agent (Grok, Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + an xAI or ElevenLabs API key so the user can start editing immediately.
 ---
 
 # video-use install
@@ -15,7 +15,7 @@ Three things must exist on this machine:
 
 1. The `video-use` repo cloned somewhere stable.
 2. `ffmpeg` on `$PATH` (plus optional `yt-dlp` for online sources).
-3. An xAI API key in `.env` at the repo root (for Grok STT). ElevenLabs Scribe is an optional fallback.
+3. An `XAI_API_KEY` and/or `ELEVENLABS_API_KEY` in `.env` at the repo root. Either is enough. Existing ElevenLabs-only installs keep working.
 
 And one thing must be true about the current agent:
 
@@ -23,7 +23,7 @@ And one thing must be true about the current agent:
 
 ## Install prompt contract
 
-- Do everything yourself. Only ask the user for things you cannot generate — the xAI API key, and confirmation before `brew install`.
+- Do everything yourself. Only ask the user for things you cannot generate — an xAI or ElevenLabs API key if neither is already set, and confirmation before `brew install`.
 - Prefer a stable clone path like `~/Developer/video-use` (not `/tmp`, not `~/Downloads`).
 - The skill references helpers by bare name (`transcribe.py`, `render.py`). That works because SKILL.md and `helpers/` ship together — keep them as siblings when you register the skill.
 - After install, verify by running one real command against one real file. Don't declare success on file-existence checks alone.
@@ -96,40 +96,52 @@ Figure out which agent you are running under, and register once. A symlink of th
 
 If you can't tell which agent you're in, ask the user once: "which agent am I running under — Grok, Claude Code, Codex, or something else?" Then pick the right target.
 
-### 5. xAI API key
+### 5. Transcription API key (xAI or ElevenLabs)
 
-Grok STT does transcription by default. Without a key, nothing transcribes. ElevenLabs Scribe remains available via `--provider elevenlabs`.
+Either key works. An existing `ELEVENLABS_API_KEY`-only `.env` is a complete install — do not ask for xAI. If both are set, Grok STT is used unless the user passes `--provider elevenlabs`.
 
 1. Check existing state in this order and stop at the first hit:
 
     ```bash
-    # a) env var already exported
-    [ -n "$XAI_API_KEY" ] && echo "env"
-    # b) .env at repo root already has it
-    grep -q '^XAI_API_KEY=..' ~/Developer/video-use/.env 2>/dev/null && echo "dotenv"
-    # c) optional Scribe fallback
+    [ -n "$XAI_API_KEY" ] && echo "xai-env"
+    grep -q '^XAI_API_KEY=..' ~/Developer/video-use/.env 2>/dev/null && echo "xai-dotenv"
     [ -n "$ELEVENLABS_API_KEY" ] && echo "elevenlabs-env"
+    grep -q '^ELEVENLABS_API_KEY=..' ~/Developer/video-use/.env 2>/dev/null && echo "elevenlabs-dotenv"
     ```
 
-2. If neither xAI nor ElevenLabs is set, ask the user exactly once:
+2. If neither key is set, ask the user exactly once:
 
-    > I need an xAI API key for Grok STT (word-level timestamps, speaker diarization, filler tagging). Grab one at https://console.x.ai/team/default/api-keys and paste it here — I'll write it to `~/Developer/video-use/.env`. Or if you already have it exported as `XAI_API_KEY`, say "use env" and I'll skip.
+    > I need an API key for transcription (word-level timestamps, speaker diarization, filler tagging). xAI (`XAI_API_KEY`, https://console.x.ai/team/default/api-keys) or ElevenLabs (`ELEVENLABS_API_KEY`, https://elevenlabs.io/app/settings/api-keys) — either works. Paste one here and I'll write it to `~/Developer/video-use/.env`. Or if you already have it exported, say "use env" and I'll skip.
 
-    When the user pastes a key, write it to `~/Developer/video-use/.env`:
+    When the user pastes a key, upsert **only that variable**. Never truncate `.env` — an existing ElevenLabs line must survive adding xAI, and vice versa:
 
     ```bash
-    printf 'XAI_API_KEY=%s\n' "$KEY" > ~/Developer/video-use/.env
-    chmod 600 ~/Developer/video-use/.env
+    ENV=~/Developer/video-use/.env
+    touch "$ENV"
+    # KEY_NAME is XAI_API_KEY or ELEVENLABS_API_KEY
+    if grep -q "^${KEY_NAME}=" "$ENV"; then
+      tmp=$(mktemp)
+      sed "s|^${KEY_NAME}=.*|${KEY_NAME}=${KEY}|" "$ENV" > "$tmp" && mv "$tmp" "$ENV"
+    else
+      printf '%s=%s\n' "$KEY_NAME" "$KEY" >> "$ENV"
+    fi
+    chmod 600 "$ENV"
     ```
 
     Never echo the key back in tool output. Never commit `.env`.
 
-3. Sanity check with a cheap, quota-free call:
+3. Sanity check with a cheap, quota-free call for whichever key you just wrote (or found):
 
     ```bash
+    # xAI
     curl -s -o /dev/null -w '%{http_code}\n' \
       -H "Authorization: Bearer $(sed -n 's/^XAI_API_KEY=//p' ~/Developer/video-use/.env)" \
       https://api.x.ai/v1/models
+
+    # ElevenLabs
+    curl -s -o /dev/null -w '%{http_code}\n' \
+      -H "xi-api-key: $(sed -n 's/^ELEVENLABS_API_KEY=//p' ~/Developer/video-use/.env)" \
+      https://api.elevenlabs.io/v1/user
     ```
 
     `200` means the key works. `401` means the user pasted a wrong/expired key — ask once more and stop. Anything else (network, 5xx), move on and verify during first real transcription.
