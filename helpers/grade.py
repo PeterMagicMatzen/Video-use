@@ -34,6 +34,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Windows consoles default to a non-UTF-8 codepage (e.g. cp1252), which raises
+# UnicodeEncodeError on the arrows this module prints. Force UTF-8 stdout
+# unconditionally rather than relying on PYTHONIOENCODING being set.
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 PRESETS: dict[str, str] = {
     # Subtle baseline — barely perceptible cleanup. No color shift.

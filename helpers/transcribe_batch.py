@@ -20,6 +20,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+# Windows consoles default to a non-UTF-8 codepage (e.g. cp1252), which raises
+# UnicodeEncodeError on the arrow this module prints. Force UTF-8 stdout
+# unconditionally rather than relying on PYTHONIOENCODING being set.
+sys.stdout.reconfigure(encoding="utf-8")
+
 from transcribe import load_api_key, transcribe_one
 
 
