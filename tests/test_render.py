@@ -174,6 +174,28 @@ class SubtitlePreflightTests(unittest.TestCase):
         )
         self.assertIn("missing.srt", output.getvalue())
 
+    def test_non_string_subtitle_font_exits_cleanly_before_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            edl_path = self._write_edl(Path(temp_dir), subtitle_font=True)
+            argv = [
+                "render.py",
+                str(edl_path),
+                "-o",
+                str(Path(temp_dir) / "out.mp4"),
+                "--build-subtitles",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(render, "require_subtitles_filter"),
+                mock.patch.object(render, "extract_all_segments") as extract,
+                self.assertRaisesRegex(
+                    SystemExit, "invalid subtitle_font in edl: .*must be a string"
+                ),
+            ):
+                render.main()
+
+            extract.assert_not_called()
+
 
 class SubtitleStyleTests(unittest.TestCase):
     def test_default_style_is_unchanged(self) -> None:
@@ -223,6 +245,12 @@ class SubtitleStyleTests(unittest.TestCase):
         for font_name in ("Helvetica,FontSize=72", "Reader's Font", r"Font\Name"):
             with self.subTest(font_name=font_name):
                 with self.assertRaisesRegex(ValueError, "subtitle_font"):
+                    render.build_subtitle_force_style(font_name)
+
+    def test_font_override_rejects_non_string_values(self) -> None:
+        for font_name in (True, 42, ["Helvetica"]):
+            with self.subTest(font_name=font_name):
+                with self.assertRaisesRegex(ValueError, "must be a string"):
                     render.build_subtitle_force_style(font_name)
 
     def test_main_passes_edl_font_override_to_compositing(self) -> None:

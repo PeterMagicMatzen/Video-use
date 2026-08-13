@@ -56,8 +56,10 @@ SUB_FORCE_STYLE_SUFFIX = (
 )
 
 
-def build_subtitle_force_style(font_name: str | None = None) -> str:
+def build_subtitle_force_style(font_name: object = None) -> str:
     """Build the proven subtitle style with an optional font override."""
+    if font_name is not None and not isinstance(font_name, str):
+        raise ValueError("subtitle_font must be a string")
     font_name = font_name or "Helvetica"
     if re.search(r"[,'\\\x00-\x1f\x7f]", font_name):
         raise ValueError(
