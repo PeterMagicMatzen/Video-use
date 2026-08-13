@@ -20,6 +20,11 @@ import json
 import sys
 from pathlib import Path
 
+# Windows consoles default to a non-UTF-8 codepage (e.g. cp1252), which raises
+# UnicodeEncodeError on the arrow this module prints. Force UTF-8 stdout
+# unconditionally rather than relying on PYTHONIOENCODING being set.
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 def format_time(seconds: float) -> str:
     """Format a time in seconds as "NNN.NN" with fixed 6-char width for alignment."""

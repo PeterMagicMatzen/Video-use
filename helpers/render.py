@@ -28,6 +28,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows consoles default to a non-UTF-8 codepage (e.g. cp1252), which raises
+# UnicodeEncodeError on the arrows/em-dashes this module prints. Force UTF-8
+# stdout unconditionally rather than relying on PYTHONIOENCODING being set.
+sys.stdout.reconfigure(encoding="utf-8")
+
 try:
     from grade import get_preset, auto_grade_for_clip  # same directory
 except Exception:
@@ -380,7 +385,7 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
         lines.append(f"{_srt_timestamp(a)} --> {_srt_timestamp(b)}")
         lines.append(t)
         lines.append("")
-    out_path.write_text("\n".join(lines))
+    out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"master SRT → {out_path.name} ({len(entries)} cues)")
 
 
@@ -537,7 +542,9 @@ def build_final_composite(
 
     # Subtitles LAST — Rule 1
     if has_subs:
-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
+        # Windows: ffmpeg's subtitles filter needs forward slashes and an escaped
+        # drive-letter colon; backslashes otherwise collide with filtergraph escaping.
+        subs_abs = str(subtitles_path.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
         filter_parts.append(
             f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
         )
