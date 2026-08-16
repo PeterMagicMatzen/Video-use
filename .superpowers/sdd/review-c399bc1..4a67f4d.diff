@@ -1,0 +1,462 @@
+﻿4a67f4d feat: stream Claude editorial turns into the app
+ SKILL.md             |   2 +
+ app/server/claude.py | 194 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ app/server/main.py   | 122 +++++++++++++++++++++++++++++++-
+ tests/test_claude.py |  39 +++++++++++
+ 4 files changed, 356 insertions(+), 1 deletion(-)
+diff --git a/SKILL.md b/SKILL.md
+index fa4b776..fff22e6 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -27,20 +27,22 @@ These are the things where deviation produces silent failures or broken output.
+ 6. **Never cut inside a word.** Snap every cut edge to a word boundary from the Scribe transcript.
+ 7. **Pad every cut edge.** Working window: 30ΓÇô200ms. Scribe timestamps drift 50ΓÇô100ms ΓÇö padding absorbs the drift. Tighter for fast-paced, looser for cinematic.
+ 8. **Word-level verbatim ASR only.** Never SRT/phrase mode (loses sub-second gap data). Never normalized fillers (loses editorial signal).
+ 9. **Cache transcripts per source.** Never re-transcribe unless the source file itself changed.
+ 10. **Parallel sub-agents for multiple animations.** Never sequential. Spawn N at once via the `Agent` tool; total wall time Γëê slowest one.
+ 11. **Strategy confirmation before execution.** Never touch the cut until the user has approved the plain-English plan.
+ 12. **All session outputs in `<videos_dir>/edit/`.** Never write inside the `video-use/` project directory.
+ 
+ Everything else in this document is a worked example. Deviate whenever the material calls for it.
+ 
++When you are launched by the video-use local app, do **not** transcribe, render, or call ffmpeg. The app owns those steps. Read `edit/takes_packed.md`, discuss strategy, and write `edit/edl.json` only after `STRATEGY_APPROVED`.
++
+ ## Directory layout
+ 
+ The skill lives in `video-use/`. User footage lives wherever they put it. All session outputs go into `<videos_dir>/edit/`.
+ 
+ ```
+ <videos_dir>/
+ Γö£ΓöÇΓöÇ <source files, untouched>
+ ΓööΓöÇΓöÇ edit/
+     Γö£ΓöÇΓöÇ project.md               ΓåÉ memory; appended every session
+     Γö£ΓöÇΓöÇ takes_packed.md          ΓåÉ phrase-level transcripts, the LLM's primary reading view
+diff --git a/app/server/claude.py b/app/server/claude.py
+new file mode 100644
+index 0000000..9b3a7aa
+--- /dev/null
++++ b/app/server/claude.py
+@@ -0,0 +1,194 @@
++from __future__ import annotations
++
++import json
++import queue
++import subprocess
++import threading
++import time
++from collections.abc import Iterator
++from pathlib import Path
++
++from app.server.paths import REPO_ROOT
++from app.server.proc import helper_env
++from app.server.session import save_session
++
++CLAUDE_TIMEOUT_S = 600
++
++EDITOR_BRIEF = """You are the video-use editor for this footage folder.
++Read edit/takes_packed.md and edit/project.md if it exists.
++Propose or revise a strategy in prose.
++Do not write edit/edl.json until you receive a message that begins with STRATEGY_APPROVED.
++Do not run ffmpeg, transcribe, render, or install anything.
++Write only under edit/.
++"""
++
++APPROVE_PROMPT = """STRATEGY_APPROVED
++Write edit/edl.json only, using the video-use schema (version, sources, ranges, grade, overlays, subtitles, total_duration_s).
++Source paths must be absolute paths to the files in this folder.
++Then stop. Do not render.
++"""
++
++
++def claude_cmd(*, folder: Path, session_id: str | None, prompt: str) -> list[str]:
++    cmd = [
++        "claude",
++        "-p",
++        "--output-format",
++        "stream-json",
++        "--append-system-prompt",
++        EDITOR_BRIEF,
++        "--allowedTools",
++        "Read,Write,Edit,Glob,Grep",
++        "--disallowedTools",
++        "Bash,WebSearch,WebFetch,Agent",
++        "--add-dir",
++        str(folder),
++        "--add-dir",
++        str(REPO_ROOT),
++    ]
++    if session_id:
++        cmd.extend(["--resume", session_id])
++    cmd.append(prompt)
++    return cmd
++
++
++def parse_session_id(stream_line: str) -> str | None:
++    try:
++        data = json.loads(stream_line)
++    except json.JSONDecodeError:
++        return None
++    sid = data.get("session_id")
++    if isinstance(sid, str) and sid:
++        return sid
++    return None
++
++
++def ensure_single_claude(session: dict) -> None:
++    if (session.get("job") or {}).get("kind") == "claude":
++        raise RuntimeError("busy")
++
++
++def _text_from_value(value: object) -> str | None:
++    if isinstance(value, str) and value:
++        return value
++    if isinstance(value, dict):
++        text = value.get("text")
++        if isinstance(text, str) and text:
++            return text
++    return None
++
++
++def _assistant_texts(data: dict) -> list[str]:
++    if data.get("type") != "assistant":
++        return []
++    message = data.get("message") or {}
++    content = message.get("content") or []
++    texts: list[str] = []
++    if isinstance(content, str) and content:
++        texts.append(content)
++        return texts
++    if not isinstance(content, list):
++        return texts
++    for block in content:
++        text = _text_from_value(block)
++        if text:
++            texts.append(text)
++    return texts
++
++
++def _delta_or_partial_text(data: dict) -> list[str]:
++    out: list[str] = []
++    for key in ("delta", "partial"):
++        text = _text_from_value(data.get(key))
++        if text:
++            out.append(text)
++    return out
++
++
++def stream_claude(*, folder: Path, prompt: str, session: dict) -> Iterator[str]:
++    cmd = claude_cmd(
++        folder=folder,
++        session_id=session.get("claude_session_id"),
++        prompt=prompt,
++    )
++    proc = subprocess.Popen(
++        cmd,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        cwd=str(folder),
++        env=helper_env(),
++        text=True,
++        encoding="utf-8",
++        errors="replace",
++        bufsize=1,
++    )
++    job = session.get("job")
++    if isinstance(job, dict):
++        job["pid"] = proc.pid
++        save_session(folder, session)
++
++    lines: queue.Queue[str | None] = queue.Queue()
++    stderr_chunks: list[str] = []
++
++    def _read_stdout() -> None:
++        try:
++            if proc.stdout is not None:
++                for line in proc.stdout:
++                    lines.put(line)
++        finally:
++            lines.put(None)
++
++    def _read_stderr() -> None:
++        if proc.stderr is not None:
++            stderr_chunks.append(proc.stderr.read() or "")
++
++    threading.Thread(target=_read_stdout, daemon=True).start()
++    threading.Thread(target=_read_stderr, daemon=True).start()
++
++    timed_out = False
++    deadline = time.monotonic() + CLAUDE_TIMEOUT_S
++    try:
++        while True:
++            remaining = deadline - time.monotonic()
++            if remaining <= 0:
++                timed_out = True
++                break
++            try:
++                line = lines.get(timeout=min(1.0, remaining))
++            except queue.Empty:
++                continue
++            if line is None:
++                break
++            sid = parse_session_id(line)
++            if sid:
++                session["claude_session_id"] = sid
++                save_session(folder, session)
++            try:
++                data = json.loads(line)
++            except json.JSONDecodeError:
++                continue
++            if not isinstance(data, dict):
++                continue
++            for text in _assistant_texts(data):
++                yield text
++            for text in _delta_or_partial_text(data):
++                yield text
++            event = data.get("event")
++            if isinstance(event, dict):
++                for text in _delta_or_partial_text(event):
++                    yield text
++        if timed_out:
++            if proc.poll() is None:
++                proc.kill()
++            raise RuntimeError("claude timeout")
++        returncode = proc.wait(timeout=max(1.0, deadline - time.monotonic()))
++        if returncode != 0:
++            err = "".join(stderr_chunks).strip()
++            raise RuntimeError(err[-400:] or f"claude exited {returncode}")
++    finally:
++        if proc.poll() is None:
++            proc.kill()
++            try:
++                proc.wait(timeout=5)
++            except subprocess.TimeoutExpired:
++                pass
+diff --git a/app/server/main.py b/app/server/main.py
+index b6e6a92..a5a8657 100644
+--- a/app/server/main.py
++++ b/app/server/main.py
+@@ -1,26 +1,29 @@
+ from __future__ import annotations
+ 
+ import json
+ import os
+ import sys
++from datetime import datetime, timezone
+ from pathlib import Path
+ 
+ from fastapi import FastAPI, HTTPException
+ from fastapi.middleware.cors import CORSMiddleware
++from fastapi.responses import StreamingResponse
+ from pydantic import BaseModel
+ 
++from app.server.claude import ensure_single_claude, stream_claude
+ from app.server.inventory import inventory
+ from app.server.jobs import start_transcribe
+ from app.server.paths import HELPERS
+ from app.server.recents import add_recent, load_recents
+-from app.server.session import load_session
++from app.server.session import load_session, save_session, session_path
+ from app.server.state import derive_center_state
+ 
+ if str(HELPERS) not in sys.path:
+     sys.path.insert(0, str(HELPERS))
+ from doctor import run_doctor
+ 
+ CURRENT_FOLDER: Path | None = None
+ 
+ 
+ def reset_current_folder() -> None:
+@@ -46,20 +49,28 @@ app.add_middleware(
+     allow_credentials=True,
+     allow_methods=["*"],
+     allow_headers=["*"],
+ )
+ 
+ 
+ class FolderBody(BaseModel):
+     path: str
+ 
+ 
++class ChatBody(BaseModel):
++    message: str
++
++
++class RejectBody(BaseModel):
++    note: str
++
++
+ def project_payload(folder: Path | None = None) -> dict:
+     folder = folder if folder is not None else CURRENT_FOLDER
+     if folder is None:
+         raise HTTPException(status_code=404, detail="no folder open")
+     session = load_session(folder)
+     doctor = run_doctor().to_dict()
+     packed_path = folder / "edit" / "takes_packed.md"
+     edl_path = folder / "edit" / "edl.json"
+     packed_exists = packed_path.is_file()
+     packed_markdown = packed_path.read_text(encoding="utf-8") if packed_exists else None
+@@ -143,10 +154,119 @@ def post_transcribe() -> dict:
+     if CURRENT_FOLDER is None:
+         raise HTTPException(status_code=409, detail="no folder open")
+     doctor = run_doctor().to_dict()
+     checks = {c["name"]: c for c in doctor["checks"]}
+     if not checks.get("elevenlabs", {}).get("ok") or not checks.get("ffmpeg", {}).get("ok"):
+         raise HTTPException(status_code=400, detail="doctor elevenlabs/ffmpeg not ok")
+     try:
+         return start_transcribe(CURRENT_FOLDER)
+     except RuntimeError as exc:
+         raise HTTPException(status_code=409, detail=str(exc)) from exc
++
++
++def _now() -> str:
++    return datetime.now(timezone.utc).isoformat()
++
++
++def _idle_job() -> dict:
++    return {"kind": "idle", "pid": None, "started_at": None, "output": None, "log": None}
++
++
++def _persisted_job(folder: Path) -> dict:
++    path = session_path(folder)
++    if not path.is_file():
++        return {}
++    data = json.loads(path.read_text(encoding="utf-8"))
++    return data.get("job") or {}
++
++
++def _require_open_folder() -> Path:
++    if CURRENT_FOLDER is None:
++        raise HTTPException(status_code=404, detail="no folder open")
++    return CURRENT_FOLDER
++
++
++def _chat_enabled(folder: Path) -> bool:
++    packed = (folder / "edit" / "takes_packed.md").is_file()
++    doctor = run_doctor().to_dict()
++    return packed and bool(doctor.get("ok"))
++
++
++def _require_chat_ready(folder: Path) -> dict:
++    if not _chat_enabled(folder):
++        raise HTTPException(status_code=400, detail="chat disabled")
++    session = load_session(folder)
++    persisted = _persisted_job(folder)
++    if persisted.get("pid") == 1 and persisted.get("kind") not in (None, "idle"):
++        raise HTTPException(status_code=409, detail="busy")
++    try:
++        ensure_single_claude(session)
++    except RuntimeError as exc:
++        raise HTTPException(status_code=409, detail=str(exc)) from exc
++    if (session.get("job") or {}).get("kind") not in (None, "idle"):
++        raise HTTPException(status_code=409, detail="busy")
++    return session
++
++
++def _sse(payload: dict) -> str:
++    return f"data: {json.dumps(payload)}\n\n"
++
++
++def _begin_claude_job(folder: Path, session: dict, prompt: str) -> dict:
++    session["last_prompt"] = prompt
++    session["last_error"] = None
++    session["job"] = {
++        "kind": "claude",
++        "pid": os.getpid(),
++        "started_at": _now(),
++        "output": None,
++        "log": None,
++    }
++    save_session(folder, session)
++    return session
++
++
++def _stream_chat_turn(folder: Path, session: dict, prompt: str):
++    _begin_claude_job(folder, session, prompt)
++
++    def events():
++        try:
++            for chunk in stream_claude(folder=folder, prompt=prompt, session=session):
++                yield _sse({"text": chunk})
++            session["chat_after_approve"] = True
++            session["last_error"] = None
++        except Exception as exc:
++            session["last_error"] = str(exc)
++        finally:
++            session["job"] = _idle_job()
++            save_session(folder, session)
++        yield _sse({"done": True})
++
++    return StreamingResponse(events(), media_type="text/event-stream")
++
++
++@app.post("/api/chat")
++def post_chat(body: ChatBody):
++    folder = _require_open_folder()
++    session = _require_chat_ready(folder)
++    note = session.pop("pending_note", None)
++    prompt = f"{note}\n\n{body.message}" if note else body.message
++    return _stream_chat_turn(folder, session, prompt)
++
++
++@app.post("/api/chat/retry")
++def post_chat_retry():
++    folder = _require_open_folder()
++    session = _require_chat_ready(folder)
++    last = session.get("last_prompt")
++    if not last:
++        raise HTTPException(status_code=400, detail="no prompt to retry")
++    return _stream_chat_turn(folder, session, last)
++
++
++@app.post("/api/reject")
++def post_reject(body: RejectBody) -> dict:
++    folder = _require_open_folder()
++    session = load_session(folder)
++    session["pending_note"] = body.note
++    save_session(folder, session)
++    return {"ok": True}
+diff --git a/tests/test_claude.py b/tests/test_claude.py
+new file mode 100644
+index 0000000..4eb8957
+--- /dev/null
++++ b/tests/test_claude.py
+@@ -0,0 +1,39 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from app.server.claude import claude_cmd, parse_session_id, EDITOR_BRIEF
++from app.server.paths import REPO_ROOT
++
++
++def test_first_turn_has_no_resume(tmp_path: Path):
++    cmd = claude_cmd(folder=tmp_path, session_id=None, prompt="hello")
++    assert cmd[0] == "claude"
++    assert "-p" in cmd
++    assert "--continue" not in cmd
++    assert "--resume" not in cmd
++    assert "--dangerously-skip-permissions" not in cmd
++    assert "--output-format" in cmd
++    assert "stream-json" in cmd
++    assert "--allowedTools" in cmd
++    assert "Bash" in " ".join(cmd)
++    # Bash is disallowed
++    dis = cmd.index("--disallowedTools")
++    assert "Bash" in cmd[dis + 1]
++    assert str(tmp_path) in cmd
++    assert str(REPO_ROOT) in cmd
++    assert any(EDITOR_BRIEF[:20] in a for a in cmd) or "--append-system-prompt" in cmd
++
++
++def test_later_turn_resumes(tmp_path: Path):
++    cmd = claude_cmd(folder=tmp_path, session_id="abc-123", prompt="more")
++    assert "--resume" in cmd
++    assert "abc-123" in cmd
++    assert "--continue" not in cmd
++
++
++def test_parse_session_id():
++    assert parse_session_id('{"type":"system","subtype":"init","session_id":"sid-1"}') == "sid-1"
++    assert parse_session_id("not-json") is None

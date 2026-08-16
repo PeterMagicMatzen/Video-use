@@ -135,3 +135,69 @@ def test_chat_sse_error_event_on_failure(client: TestClient, tmp_path: Path, mon
     assert r.status_code == 200
     assert '"error": "claude failed"' in r.text
     assert '"done": true' in r.text
+
+
+def test_auto_edit_starts_without_packed(client: TestClient, tmp_path: Path, monkeypatch):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    called = {"n": 0}
+    import app.server.main as main_mod
+
+    def fake_start(_folder, _variation=None):
+        called["n"] += 1
+        return {"accepted": True}
+
+    monkeypatch.setattr(
+        main_mod,
+        "run_doctor",
+        lambda: type("D", (), {"to_dict": lambda self: {"ok": True, "checks": [
+            {"name": "claude", "ok": True},
+            {"name": "claude_login", "ok": True},
+        ]}})(),
+    )
+    monkeypatch.setattr(main_mod, "start_auto_edit", fake_start)
+    r = client.post("/api/auto-edit", json={"variation": "energy"})
+    assert r.status_code == 202
+    assert called["n"] == 1
+
+
+def test_auto_voices_starts_when_ready(client: TestClient, tmp_path: Path, monkeypatch):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    (tmp_path / "edit").mkdir(exist_ok=True)
+    (tmp_path / "edit" / "takes_packed.md").write_text("packed", encoding="utf-8")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    called = {"n": 0}
+    import app.server.main as main_mod
+
+    def fake_start(_folder, _variation=None):
+        called["n"] += 1
+        return {"accepted": True}
+
+    monkeypatch.setattr(
+        main_mod,
+        "run_doctor",
+        lambda: type("D", (), {"to_dict": lambda self: {"ok": True, "checks": [
+            {"name": "claude", "ok": True},
+            {"name": "claude_login", "ok": True},
+        ]}})(),
+    )
+    monkeypatch.setattr(main_mod, "start_claude_voices", fake_start)
+    r = client.post("/api/auto-voices")
+    assert r.status_code == 202
+    assert called["n"] == 1
+
+
+def test_undo_without_history(client: TestClient, tmp_path: Path):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    r = client.post("/api/undo")
+    assert r.status_code in {400, 409}
+    assert "undo" in r.text.lower()
+
+
+def test_strip_requires_transcript(client: TestClient, tmp_path: Path):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    r = client.post("/api/strip-claude")
+    assert r.status_code == 400
+    assert "transcribe" in r.text.lower()

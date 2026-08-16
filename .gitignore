@@ -62,3 +62,7 @@ project.md
 # Mixkit SFX binaries (catalog.json is tracked)
 library/sfx/*.mp3
 library/sfx/*.wav
+library/broll/*.mp4
+library/photos/*.jpg
+library/photos/*.jpeg
+library/photos/*.png

@@ -54,16 +54,18 @@ SUB_FORCE_STYLE = force_style()
 
 # -------- Helpers ------------------------------------------------------------
 
+from hidden_proc import run as _hidden_run
+
 
 def run(cmd: list[str], quiet: bool = False) -> None:
     if not quiet:
         print(f"  $ {' '.join(str(c) for c in cmd[:6])}{' …' if len(cmd) > 6 else ''}")
-    subprocess.run(cmd, check=True)
+    _hidden_run(cmd, check=True)
 
 
 def run_ffmpeg(cmd: list[str]) -> None:
     """Run ffmpeg with stderr captured; print it on failure so helpers see it."""
-    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    proc = _hidden_run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     if proc.returncode != 0:
         raw = proc.stderr or b""
         err = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else raw
@@ -128,7 +130,7 @@ TONEMAP_CHAIN = (
 def is_hdr_source(video: Path) -> bool:
     """Return True if the source uses a PQ or HLG transfer function."""
     try:
-        out = subprocess.run(
+        out = _hidden_run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=color_transfer",
              "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
@@ -139,19 +141,24 @@ def is_hdr_source(video: Path) -> bool:
         return False
 
 
-def is_portrait_source(video: Path) -> bool:
-    """Return True if the video's height > width (portrait / vertical)."""
+def probe_video_size(video: Path) -> tuple[int, int] | None:
     try:
-        out = subprocess.run(
+        out = _hidden_run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height",
              "-of", "csv=p=0", str(video)],
             capture_output=True, text=True, check=True,
         )
         w, h = map(int, out.stdout.strip().split(","))
-        return h > w
+        return w, h
     except Exception:
-        return False
+        return None
+
+
+def is_portrait_source(video: Path) -> bool:
+    """Return True if the video's height > width (portrait / vertical)."""
+    size = probe_video_size(video)
+    return bool(size and size[1] > size[0])
 
 
 # -------- Per-segment extraction (Rule 2 + Rule 3) --------------------------
@@ -165,6 +172,8 @@ def extract_segment(
     out_path: Path,
     preview: bool = False,
     draft: bool = False,
+    zoom: float = 1.0,
+    cover: bool = False,
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -179,7 +188,10 @@ def extract_segment(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     portrait = is_portrait_source(source)
-    if draft:
+    if cover:
+        canvas = "720:1280" if draft else "1080:1920"
+        scale = f"scale={canvas}:force_original_aspect_ratio=increase,crop={canvas}"
+    elif draft:
         scale = "scale=-2:1280" if portrait else "scale=1280:-2"
     else:
         scale = "scale=-2:1920" if portrait else "scale=1920:-2"
@@ -188,6 +200,11 @@ def extract_segment(
     if is_hdr_source(source):
         vf_parts.append(TONEMAP_CHAIN)
     vf_parts.append(scale)
+    if zoom and zoom > 1.01:
+        vf_parts.append(
+            f"scale=2*trunc(iw*{zoom:.3f}/2):2*trunc(ih*{zoom:.3f}/2),"
+            f"crop=trunc(iw/{zoom:.3f}/2)*2:trunc(ih/{zoom:.3f}/2)*2"
+        )
     if grade_filter:
         vf_parts.append(grade_filter)
     vf = ",".join(vf_parts)
@@ -263,7 +280,17 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft)
+        extract_segment(
+            src_path,
+            start,
+            duration,
+            seg_filter,
+            out_path,
+            preview=preview,
+            draft=draft,
+            zoom=float(r.get("zoom") or 1.0),
+            cover=bool(r.get("cover")),
+        )
         seg_paths.append(out_path)
 
     return seg_paths
@@ -417,7 +444,7 @@ def measure_loudness(video_path: Path) -> dict[str, str] | None:
         "-af", filter_str,
         "-vn", "-f", "null", "-",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = _hidden_run(cmd, capture_output=True, text=True)
     # loudnorm prints the JSON to stderr at the end of the run
     stderr = proc.stderr
 
@@ -442,19 +469,27 @@ def mix_audio_overlays(video: Path, overlays: list, edit_dir: Path) -> None:
     for ov in overlays:
         p = resolve_path(str(ov.get("file") or ""), edit_dir)
         if p.is_file():
-            usable.append((p, float(ov.get("start_in_output") or 0.0)))
+            usable.append((
+                p,
+                float(ov.get("start_in_output") or 0.0),
+                float(ov.get("duration") or 0.0),
+            ))
     if not usable:
         return
     inputs = ["-i", str(video)]
     filters = []
     mix_in = ["[0:a]"]
-    for i, (path, start) in enumerate(usable, start=1):
+    layer_vol = 0.72 if len(usable) < 5 else 0.55
+    for i, (path, start, duration) in enumerate(usable, start=1):
         inputs += ["-i", str(path)]
         ms = max(0, int(start * 1000))
-        filters.append(f"[{i}:a]adelay={ms}|{ms},volume=0.85[s{i}]")
+        trim = f"atrim=0:{duration:.3f}," if duration > 0.05 else ""
+        filters.append(f"[{i}:a]{trim}adelay={ms}|{ms},volume={layer_vol}[s{i}]")
         mix_in.append(f"[s{i}]")
     n = 1 + len(usable)
-    filters.append(f"{''.join(mix_in)}amix=inputs={n}:duration=first:dropout_transition=0:normalize=0[aout]")
+    filters.append(
+        f"{''.join(mix_in)}amix=inputs={n}:duration=first:dropout_transition=0:normalize=1[aout]"
+    )
     mixed = video.with_suffix(".sfxmix.mp4")
     cmd = [
         "ffmpeg", "-y",
@@ -561,10 +596,19 @@ def build_final_composite(
         inputs += ["-i", str(ov_path)]
 
     filter_parts: list[str] = []
-    # PTS-shift every overlay so its frame 0 lands at start_in_output
+    size = probe_video_size(base_path)
+    # PTS-shift every overlay so its frame 0 lands at start_in_output.
+    # Scale graphics to the base frame so 1080x1920 cards sit on 720x1280 previews.
     for idx, ov in enumerate(overlays, start=1):
         t = float(ov["start_in_output"])
-        filter_parts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t}/TB[a{idx}]")
+        if size:
+            w, h = size
+            filter_parts.append(
+                f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h},setpts=PTS-STARTPTS+{t}/TB[a{idx}]"
+            )
+        else:
+            filter_parts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t}/TB[a{idx}]")
 
     # Chain overlays on top of base
     current = "[0:v]"

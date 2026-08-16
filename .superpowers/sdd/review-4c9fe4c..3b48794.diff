@@ -1,0 +1,83 @@
+﻿3b48794 docs: bypass Restricted policy when launching the app
+ README.md           | 10 +++++++---
+ app/scripts/dev.ps1 |  1 +
+ install.md          |  4 ++--
+ 3 files changed, 10 insertions(+), 5 deletions(-)
+diff --git a/README.md b/README.md
+index 530bb0a..5c14668 100644
+--- a/README.md
++++ b/README.md
+@@ -63,23 +63,27 @@ uv sync                         # or: pip install -e .
+ brew install ffmpeg             # required
+ brew install yt-dlp             # optional, for downloading online sources
+ 
+ # 3. Add your ElevenLabs API key
+ cp .env.example .env
+ $EDITOR .env                    # ELEVENLABS_API_KEY=...
+ ```
+ 
+ ### Local app (Windows)
+ 
+-Windows users can run the local app via `app/scripts/dev.ps1` after
+-`pip install -e ".[app]"`. See `install.md` for full Windows setup
+-(ffmpeg via winget, skill junction, and launch).
++Windows users can run the local app after `pip install -e ".[app]"`:
++
++```powershell
++powershell -ExecutionPolicy Bypass -File app\scripts\dev.ps1
++```
++
++See `install.md` for full Windows setup (ffmpeg via winget, skill junction, and launch).
+ 
+ 
+ ## How it works
+ 
+ The LLM never watches the video. It **reads** it ΓÇö through two layers that together give it everything it needs to cut with word-boundary precision.
+ 
+ <p align="center">
+   <img src="static/timeline-view.svg" alt="timeline_view composite ΓÇö filmstrip + speaker track + waveform + word labels + silence-gap cut candidates" width="100%">
+ </p>
+ 
+diff --git a/app/scripts/dev.ps1 b/app/scripts/dev.ps1
+index 68527e2..da2dee3 100644
+--- a/app/scripts/dev.ps1
++++ b/app/scripts/dev.ps1
+@@ -1,8 +1,9 @@
++# If Restricted policy blocks this script: powershell -ExecutionPolicy Bypass -File app\scripts\dev.ps1
+ $ErrorActionPreference = "Stop"
+ $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+ Set-Location $root
+ 
+ Start-Process -NoNewWindow -FilePath "python" -ArgumentList "-m", "uvicorn", "app.server.main:app", "--host", "127.0.0.1", "--port", "8787", "--reload"
+ Set-Location (Join-Path $root "app\web")
+ if (-not (Test-Path "node_modules")) { npm install }
+ npm run dev
+diff --git a/install.md b/install.md
+index aaaa526..78733c9 100644
+--- a/install.md
++++ b/install.md
+@@ -71,22 +71,22 @@ command -v yt-dlp >/dev/null || brew install yt-dlp     # optional
+ # ffmpeg full build (has libass / subtitles)
+ winget install Gyan.FFmpeg
+ 
+ # Python extras for the local app
+ cd $HOME\Developer\video-use
+ pip install -e ".[app,dev]"
+ 
+ # Skill junction (already present on this machine; recreate if needed)
+ New-Item -ItemType Junction -Path "$HOME\.claude\skills\video-use" -Target "$HOME\Developer\video-use" -Force
+ 
+-# Launch the local app
+-powershell -File app\scripts\dev.ps1
++# Launch the local app (-ExecutionPolicy Bypass for Restricted machines)
++powershell -ExecutionPolicy Bypass -File app\scripts\dev.ps1
+ # UI: http://localhost:5173   API: http://127.0.0.1:8787
+ ```
+ 
+ If `brew` / `apt` / `pacman` requires a sudo prompt, tell the user the exact command and wait. Do not invent a password.
+ 
+ ### 4. Register the skill with the current agent
+ 
+ Figure out which agent you are running under, and register once. A symlink of the whole repo directory is the right shape ΓÇö helpers/ needs to sit next to SKILL.md.
+ 
+ - **Claude Code** (`~/.claude/` present):

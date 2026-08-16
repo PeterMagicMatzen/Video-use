@@ -9,12 +9,22 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.server.claude import ensure_single_claude, stream_claude
 from app.server.inventory import VIDEO_EXTS, find_videos, inventory
-from app.server.jobs import start_approve_and_preview, start_auto_edit, start_render, start_transcribe
-from app.server.paths import HELPERS
+from app.server.jobs import (
+    history_available,
+    start_approve_and_preview,
+    start_auto_edit,
+    start_claude_voices,
+    start_render,
+    start_strip,
+    start_transcribe,
+    start_undo,
+)
+from app.server.paths import HELPERS, REPO_ROOT
 from app.server.recents import add_recent, load_recents, clear_recents
 from app.server.session import load_session, save_session, session_path
 from app.server.state import derive_center_state
@@ -70,9 +80,19 @@ def resolve_footage_path(raw: str) -> Path:
 
 
 app = FastAPI()
+
+
+@app.get("/api/health")
+def get_health() -> dict:
+    return {"ok": True, "ui": (REPO_ROOT / "app" / "web" / "dist" / "index.html").is_file()}
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8787",
+        "http://localhost:8787",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -89,6 +109,10 @@ class ChatBody(BaseModel):
 
 class RejectBody(BaseModel):
     note: str
+
+
+class VariationBody(BaseModel):
+    variation: str | None = None
 
 
 def project_payload(folder: Path | None = None) -> dict:
@@ -130,7 +154,18 @@ def project_payload(folder: Path | None = None) -> dict:
         "bin": _load_bin(folder),
         "job": session["job"],
         "stale": center_state == "stale",
+        "can_undo": history_available(folder),
+        "variation": session.get("cut_variation") or "energy",
+        "variations": _variation_options(),
     }
+
+
+def _variation_options() -> list[dict]:
+    if str(HELPERS) not in sys.path:
+        sys.path.insert(0, str(HELPERS))
+    from cut_picks import VARIATIONS
+    labels = {"energy": "Energy", "tight": "Tight", "calm": "Calm"}
+    return [{"id": key, "label": labels.get(key, key), "detail": text} for key, text in VARIATIONS.items()]
 
 
 def _load_bin(folder: Path) -> list[dict]:
@@ -441,15 +476,63 @@ def _job_http_error(exc: RuntimeError) -> HTTPException:
     return HTTPException(status_code=code, detail=msg)
 
 
+@app.post("/api/generate", status_code=202)
+def post_generate(body: VariationBody = VariationBody()) -> dict:
+    return post_auto_edit(body)
+
+
 @app.post("/api/auto-edit", status_code=202)
-def post_auto_edit() -> dict:
+def post_auto_edit(body: VariationBody = VariationBody()) -> dict:
     if CURRENT_FOLDER is None:
         raise HTTPException(status_code=409, detail="no folder open")
-    packed = CURRENT_FOLDER / "edit" / "takes_packed.md"
-    if not packed.is_file():
+    doctor = run_doctor().to_dict()
+    checks = {c["name"]: c for c in doctor["checks"]}
+    if not checks.get("claude", {}).get("ok") or not checks.get("claude_login", {}).get("ok"):
+        raise HTTPException(
+            status_code=400,
+            detail="Claude is not logged in. Open PowerShell and run: claude auth login",
+        )
+    try:
+        return start_auto_edit(CURRENT_FOLDER, body.variation)
+    except RuntimeError as exc:
+        raise _job_http_error(exc) from exc
+
+
+@app.post("/api/auto-voices", status_code=202)
+def post_auto_voices(body: VariationBody = VariationBody()) -> dict:
+    if CURRENT_FOLDER is None:
+        raise HTTPException(status_code=409, detail="no folder open")
+    doctor = run_doctor().to_dict()
+    checks = {c["name"]: c for c in doctor["checks"]}
+    if not checks.get("claude", {}).get("ok") or not checks.get("claude_login", {}).get("ok"):
+        raise HTTPException(
+            status_code=400,
+            detail="Claude is not logged in. Open PowerShell and run: claude auth login",
+        )
+    try:
+        return start_claude_voices(CURRENT_FOLDER, body.variation)
+    except RuntimeError as exc:
+        raise _job_http_error(exc) from exc
+
+
+@app.post("/api/undo", status_code=202)
+def post_undo() -> dict:
+    if CURRENT_FOLDER is None:
+        raise HTTPException(status_code=409, detail="no folder open")
+    try:
+        return start_undo(CURRENT_FOLDER)
+    except RuntimeError as exc:
+        raise _job_http_error(exc) from exc
+
+
+@app.post("/api/strip-claude", status_code=202)
+def post_strip_claude() -> dict:
+    if CURRENT_FOLDER is None:
+        raise HTTPException(status_code=409, detail="no folder open")
+    if not (CURRENT_FOLDER / "edit" / "takes_packed.md").is_file():
         raise HTTPException(status_code=400, detail="transcribe first")
     try:
-        return start_auto_edit(CURRENT_FOLDER)
+        return start_strip(CURRENT_FOLDER)
     except RuntimeError as exc:
         raise _job_http_error(exc) from exc
 
@@ -501,3 +584,31 @@ def get_media_source(name: str):
     if match is None or not match.is_file():
         raise HTTPException(status_code=404, detail="source not found")
     return FileResponse(match)
+
+
+DIST = REPO_ROOT / "app" / "web" / "dist"
+
+
+@app.get("/")
+def get_ui_root():
+    index = DIST / "index.html"
+    if not index.is_file():
+        return {"ok": True, "error": "UI not built. Run: cd app/web && npm run build"}
+    return FileResponse(index, headers={"Cache-Control": "no-store"})
+
+
+if (DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="ui-assets")
+
+
+@app.get("/{rest:path}")
+def get_ui_fallback(rest: str):
+    if rest.startswith("api/"):
+        raise HTTPException(status_code=404, detail="not found")
+    candidate = DIST / rest
+    if candidate.is_file():
+        return FileResponse(candidate)
+    index = DIST / "index.html"
+    if index.is_file():
+        return FileResponse(index, headers={"Cache-Control": "no-store"})
+    raise HTTPException(status_code=404, detail="not found")

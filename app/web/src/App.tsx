@@ -7,6 +7,8 @@ import {
   getState,
   postApprove,
   postAutoEdit,
+  postStripClaude,
+  postUndo,
   postBinAdd,
   postBinRemove,
   postClearRecents,
@@ -19,13 +21,13 @@ import {
   postOpenOutput,
   postReject,
   postRenderFinal,
-  postTranscribe,
   retryChat,
   streamChat,
 } from "./api";
-import { canApprove, canAutoEdit, canChat, canRenderFinal, canTranscribe } from "./buttons";
+import { canApprove, canChat, canGenerate, canRenderFinal } from "./buttons";
 import { headlineFor, stepIndex } from "./status";
-import type { Doctor, ProjectPayload, SfxItem } from "./types";
+import { bootFromTab, clearTabFolder, readTabFolder, shouldAdoptServerState, writeTabFolder } from "./tabSession";
+import type { CutVariation, Doctor, ProjectPayload, SfxItem } from "./types";
 import "./App.css";
 
 type ChatLine = { role: "user" | "assistant"; text: string };
@@ -42,11 +44,19 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function errorText(sessionError: string | null | undefined, local: string | null): string | null {
-  return sessionError || local;
+function friendlyError(text: string): string {
+  if (/job died \(pid/i.test(text) || /previous \w+ job died/i.test(text)) {
+    return "Generate stopped. Tap Generate to try again.";
+  }
+  return text;
 }
 
-const STEPS = ["Add clip", "Transcribe", "Edit", "Watch"];
+function errorText(sessionError: string | null | undefined, local: string | null): string | null {
+  const raw = sessionError || local;
+  return raw ? friendlyError(raw) : null;
+}
+
+const STEPS = ["Clip", "Generate", "Watch"];
 
 export default function App() {
   const [payload, setPayload] = useState<ProjectPayload | null>(null);
@@ -63,32 +73,51 @@ export default function App() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [sfx, setSfx] = useState<SfxItem[]>([]);
   const [sfxQuery, setSfxQuery] = useState("");
+  const [variation, setVariation] = useState("energy");
 
   const applyPayload = useCallback((next: ProjectPayload) => {
     setPayload(next);
     setDoctor(next.doctor);
     setRecents(next.recents);
     setPath(next.folder);
+    if (next.folder) writeTabFolder(next.folder);
+    if (next.variation) setVariation(next.variation);
   }, []);
 
-  const refresh = useCallback(async () => {
-    const state = await getState();
-    if (state) {
-      applyPayload(state as ProjectPayload);
-      return;
-    }
+  const showEmpty = useCallback(async () => {
     setPayload(null);
     const [d, rec] = await Promise.all([getDoctor(), getRecents()]);
     setDoctor(d as Doctor);
     setRecents(rec);
-  }, [applyPayload]);
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const tabFolder = readTabFolder();
+    if (!tabFolder) {
+      await showEmpty();
+      return;
+    }
+    const state = (await getState()) as ProjectPayload | null;
+    if (state && shouldAdoptServerState(tabFolder, state.folder)) {
+      applyPayload(state);
+      return;
+    }
+    try {
+      applyPayload((await postFolder(tabFolder)) as ProjectPayload);
+    } catch {
+      clearTabFolder();
+      await showEmpty();
+    }
+  }, [applyPayload, showEmpty]);
 
   useEffect(() => {
-    refresh().catch((err: unknown) => setActionError(errText(err)));
+    const boot = bootFromTab(readTabFolder());
+    const start = boot.mode === "restore" ? refresh() : showEmpty();
+    start.catch((err: unknown) => setActionError(errText(err)));
     getSfxLibrary()
       .then((data) => setSfx(Array.isArray(data.items) ? data.items : []))
       .catch(() => setSfx([]));
-  }, [refresh]);
+  }, [refresh, showEmpty]);
 
   const jobKind = payload?.job?.kind ?? "idle";
   useEffect(() => {
@@ -197,13 +226,19 @@ export default function App() {
             </li>
           ))}
         </ol>
-        <ul className="health" aria-label="System checks">
-          {checks.map((c) => (
-            <li key={c.name} className={c.ok ? "ok" : c.required ? "bad" : "warn"} title={c.detail}>
-              {c.name.replace("_", " ")}
-            </li>
-          ))}
-        </ul>
+        {checks.some((c) => !c.ok) ? (
+          <ul className="health" aria-label="System checks">
+            {checks.filter((c) => !c.ok).map((c) => (
+              <li key={c.name} className={c.required ? "bad" : "warn"} title={c.detail}>
+                {c.name.replace("_", " ")}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+            Ready
+          </p>
+        )}
       </header>
 
       <div className="body">
@@ -224,6 +259,8 @@ export default function App() {
             <strong>Add talking-head video</strong>
             <span>Opens a file picker on this PC. The clip never uploads.</span>
           </button>
+          {moreOpen ? (
+            <>
           <div className="path-row">
             <input
               value={path}
@@ -252,6 +289,8 @@ export default function App() {
           >
             Browse folder
           </button>
+            </>
+          ) : null}
 
           {sources.length > 0 ? (
             <ul className="clips">
@@ -275,6 +314,7 @@ export default function App() {
               disabled={working}
               onClick={() =>
                 void run(async () => {
+                  clearTabFolder();
                   await postCloseProject();
                   setPayload(null);
                   setPath("");
@@ -287,7 +327,10 @@ export default function App() {
           ) : null}
 
           <p className="eyebrow">Add-ins</p>
-          <p className="muted">B-roll, graphics, and voice clips you pick. They land in the next professional edit.</p>
+          <p className="muted">
+            Generate asks Claude for punch-ins, Mixkit sound, Pexels stills
+            as Ken Burns B-roll, and keyword graphics.
+          </p>
           <div className="bin-actions">
             {(["broll", "graphic", "voice"] as const).map((kind) => (
               <button
@@ -332,7 +375,7 @@ export default function App() {
           )}
 
           <p className="eyebrow">Mixkit SFX library</p>
-          <p className="muted">Free Mixkit effects. Add one, then run Make professional edit.</p>
+          <p className="muted">Claude scores these. Manual Add is extra on top of that bed.</p>
           <input
             value={sfxQuery}
             onChange={(e) => setSfxQuery(e.target.value)}
@@ -407,12 +450,12 @@ export default function App() {
 
           {working ? (
             <p className="pulse" role="status">
-              {jobKind === "transcribe"
-                ? "Transcribing speech…"
-                : jobKind === "render"
-                  ? "Rendering the movie — this is the real cut, not just the plan file."
-                  : jobKind === "claude"
-                    ? "Claude is writing the plan…"
+              {payload?.job?.phase === "transcribe" || jobKind === "transcribe"
+                ? "Writing captions…"
+                : payload?.job?.phase === "directing" || jobKind === "claude" || jobKind === "generate"
+                  ? "Directing cuts and sound…"
+                  : jobKind === "render" || payload?.job?.phase === "rendering"
+                    ? "Exporting the movie…"
                     : "Working…"}
             </p>
           ) : null}
@@ -443,18 +486,49 @@ export default function App() {
           </div>
 
           <div className="cta">
-            {canTranscribe(center, doctorOk) ? (
-              <button type="button" className="primary" disabled={working} onClick={() => void run(() => postTranscribe())}>
-                Transcribe take
-              </button>
-            ) : null}
+
+            <div className="toggle" role="group" aria-label="Cut variation">
+              {(payload?.variations?.length
+                ? payload.variations
+                : [
+                    { id: "energy", label: "Energy", detail: "" },
+                    { id: "tight", label: "Tight", detail: "" },
+                    { id: "calm", label: "Calm", detail: "" },
+                  ]
+              ).map((opt: CutVariation) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className={variation === opt.id ? "on" : ""}
+                  disabled={working}
+                  title={opt.detail}
+                  onClick={() => setVariation(opt.id)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               className="primary"
-              disabled={working || !canAutoEdit(center, Boolean(payload?.packed_markdown))}
-              onClick={() => void run(() => postAutoEdit())}
+              disabled={working || !canGenerate(center, sources.length > 0, Boolean(login?.ok))}
+              onClick={() => void run(() => postAutoEdit(variation))}
             >
-              Make professional edit
+              {hasCut ? "Regenerate" : "Generate"}
+            </button>
+            <button
+              type="button"
+              disabled={working || !payload?.can_undo}
+              onClick={() => void run(() => postUndo())}
+            >
+              Undo last Claude pass
+            </button>
+            <button
+              type="button"
+              disabled={working || !hasCut}
+              onClick={() => void run(() => postStripClaude())}
+            >
+              Remove cinematic + library audio
             </button>
             <button
               type="button"
@@ -474,7 +548,10 @@ export default function App() {
             <ol className="timeline">
               {(payload?.edl?.ranges ?? []).map((r, i) => (
                 <li key={`${r.source}-${r.start}-${r.end}-${i}`}>
-                  <span>{r.beat ?? `Cut ${i + 1}`}</span>
+                  <span>
+                    {r.beat ?? `Cut ${i + 1}`}
+                    {r.zoom && r.zoom > 1.01 ? ` · ${r.zoom.toFixed(2)}×` : ""}
+                  </span>
                   <b>{r.quote || `${r.start.toFixed(1)}–${r.end.toFixed(1)}`}</b>
                 </li>
               ))}

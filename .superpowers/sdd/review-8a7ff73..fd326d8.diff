@@ -1,0 +1,243 @@
+﻿fd326d8 fix: utf-8 helper stdout on Windows
+
+## Files changed
+ helpers/grade.py            |  2 ++
+ helpers/pack_transcripts.py |  2 ++
+ helpers/render.py           |  2 ++
+ helpers/stdio.py            | 12 ++++++++++++
+ helpers/transcribe.py       |  2 ++
+ helpers/transcribe_batch.py |  2 ++
+ pyproject.toml              |  2 ++
+ tests/conftest.py           | 23 +++++++++++++++++++++++
+ tests/test_stdio.py         | 16 ++++++++++++++++
+ 9 files changed, 63 insertions(+)
+
+## Diff
+diff --git a/helpers/grade.py b/helpers/grade.py
+index becf6fb..a957aee 100644
+--- a/helpers/grade.py
++++ b/helpers/grade.py
+@@ -285,20 +285,22 @@ def apply_grade(input_path: Path, output_path: Path, filter_string: str) -> None
+             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+             "-pix_fmt", "yuv420p",
+             "-c:a", "copy",
+             "-movflags", "+faststart",
+             str(output_path),
+         ]
+     subprocess.run(cmd, check=True)
+ 
+ 
+ def main() -> None:
++    from stdio import configure_stdio
++    configure_stdio()
+     ap = argparse.ArgumentParser(description="Apply a color grade via ffmpeg filter chain")
+     ap.add_argument("input", type=Path, nargs="?", help="Input video")
+     ap.add_argument("-o", "--output", type=Path, help="Output video")
+     ap.add_argument(
+         "--preset",
+         type=str,
+         default=None,
+         choices=list(PRESETS.keys()),
+         help="Grade preset. Omit for auto mode (default).",
+     )
+diff --git a/helpers/pack_transcripts.py b/helpers/pack_transcripts.py
+index 036a127..4d4028e 100644
+--- a/helpers/pack_transcripts.py
++++ b/helpers/pack_transcripts.py
+@@ -156,20 +156,22 @@ def render_markdown(entries: list[tuple[str, float, list[dict]]], silence_thresh
+                     spk_str = spk_str[len("speaker_"):]
+                 spk_tag = f" S{spk_str}"
+             else:
+                 spk_tag = ""
+             lines.append(f"  [{format_time(p['start'])}-{format_time(p['end'])}]{spk_tag} {p['text']}")
+         lines.append("")
+     return "\n".join(lines)
+ 
+ 
+ def main() -> None:
++    from stdio import configure_stdio
++    configure_stdio()
+     ap = argparse.ArgumentParser(description="Pack Scribe transcripts into takes_packed.md")
+     ap.add_argument("--edit-dir", type=Path, required=True, help="Edit directory containing transcripts/")
+     ap.add_argument(
+         "--silence-threshold",
+         type=float,
+         default=0.5,
+         help="Break phrases on silences >= this (seconds). Default 0.5.",
+     )
+     ap.add_argument(
+         "-o", "--output",
+diff --git a/helpers/render.py b/helpers/render.py
+index 0d02cff..8c5cfcd 100644
+--- a/helpers/render.py
++++ b/helpers/render.py
+@@ -566,20 +566,22 @@ def build_final_composite(
+     ]
+     print(f"compositing ΓåÆ {out_path.name}")
+     print(f"  overlays: {len(overlays)}, subtitles: {'yes' if has_subs else 'no'}")
+     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+ 
+ 
+ # -------- Main ---------------------------------------------------------------
+ 
+ 
+ def main() -> None:
++    from stdio import configure_stdio
++    configure_stdio()
+     ap = argparse.ArgumentParser(description="Render a video from an EDL")
+     ap.add_argument("edl", type=Path, help="Path to edl.json")
+     ap.add_argument("-o", "--output", type=Path, required=True, help="Output video path")
+     ap.add_argument(
+         "--preview",
+         action="store_true",
+         help="Preview mode: 1080p, medium, CRF 22 ΓÇö evaluable for QC, faster than final.",
+     )
+     ap.add_argument(
+         "--draft",
+diff --git a/helpers/stdio.py b/helpers/stdio.py
+new file mode 100644
+index 0000000..4549246
+--- /dev/null
++++ b/helpers/stdio.py
+@@ -0,0 +1,12 @@
++"""Make helper prints safe on non-UTF-8 stdout (Windows cp1252)."""
++
++from __future__ import annotations
++
++import sys
++
++
++def configure_stdio() -> None:
++    for stream in (sys.stdout, sys.stderr):
++        reconfigure = getattr(stream, "reconfigure", None)
++        if callable(reconfigure):
++            reconfigure(encoding="utf-8", errors="replace")
+diff --git a/helpers/transcribe.py b/helpers/transcribe.py
+index 26d3906..77eca93 100644
+--- a/helpers/transcribe.py
++++ b/helpers/transcribe.py
+@@ -126,20 +126,22 @@ def transcribe_one(
+     if verbose:
+         kb = out_path.stat().st_size / 1024
+         print(f"  saved: {out_path.name} ({kb:.1f} KB) in {dt:.1f}s")
+         if isinstance(payload, dict) and "words" in payload:
+             print(f"    words: {len(payload['words'])}")
+ 
+     return out_path
+ 
+ 
+ def main() -> None:
++    from stdio import configure_stdio
++    configure_stdio()
+     ap = argparse.ArgumentParser(description="Transcribe a video with ElevenLabs Scribe")
+     ap.add_argument("video", type=Path, help="Path to video file")
+     ap.add_argument(
+         "--edit-dir",
+         type=Path,
+         default=None,
+         help="Edit output directory (default: <video_parent>/edit)",
+     )
+     ap.add_argument(
+         "--language",
+diff --git a/helpers/transcribe_batch.py b/helpers/transcribe_batch.py
+index 5aeb1d6..1b40a09 100644
+--- a/helpers/transcribe_batch.py
++++ b/helpers/transcribe_batch.py
+@@ -28,20 +28,22 @@ VIDEO_EXTS = {".mp4", ".MP4", ".mov", ".MOV", ".mkv", ".MKV", ".avi", ".AVI", ".
+ 
+ def find_videos(videos_dir: Path) -> list[Path]:
+     videos = sorted(
+         p for p in videos_dir.iterdir()
+         if p.is_file() and p.suffix in VIDEO_EXTS
+     )
+     return videos
+ 
+ 
+ def main() -> None:
++    from stdio import configure_stdio
++    configure_stdio()
+     ap = argparse.ArgumentParser(description="Parallel batch transcription of a videos directory")
+     ap.add_argument("videos_dir", type=Path, help="Directory containing source videos")
+     ap.add_argument(
+         "--edit-dir",
+         type=Path,
+         default=None,
+         help="Edit output directory (default: <videos_dir>/edit)",
+     )
+     ap.add_argument("--workers", type=int, default=4, help="Parallel workers (default: 4)")
+     ap.add_argument(
+diff --git a/pyproject.toml b/pyproject.toml
+index c2cff29..f5762ef 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -7,17 +7,19 @@ requires-python = ">=3.10"
+ dependencies = [
+     "requests",
+     "librosa",
+     "matplotlib",
+     "pillow",
+     "numpy",
+ ]
+ 
+ [project.optional-dependencies]
+ animations = ["manim"]
++app = ["fastapi>=0.115", "uvicorn[standard]>=0.32", "pydantic>=2.0"]
++dev = ["pytest>=8.0"]
+ 
+ [build-system]
+ requires = ["setuptools>=61.0"]
+ build-backend = "setuptools.build_meta"
+ 
+ [tool.setuptools]
+ py-modules = []
+diff --git a/tests/conftest.py b/tests/conftest.py
+new file mode 100644
+index 0000000..c9738c1
+--- /dev/null
++++ b/tests/conftest.py
+@@ -0,0 +1,23 @@
++from __future__ import annotations
++
++import sys
++from pathlib import Path
++
++import pytest
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++HELPERS = REPO_ROOT / "helpers"
++
++# Collection-time import of helpers (e.g. `from stdio import ...`) needs path
++# before fixtures run.
++for _p in (str(REPO_ROOT), str(HELPERS)):
++    if _p not in sys.path:
++        sys.path.insert(0, _p)
++
++
++@pytest.fixture(autouse=True)
++def helpers_on_path():
++    for p in (str(REPO_ROOT), str(HELPERS)):
++        if p not in sys.path:
++            sys.path.insert(0, p)
++    yield
+diff --git a/tests/test_stdio.py b/tests/test_stdio.py
+new file mode 100644
+index 0000000..26b5e9e
+--- /dev/null
++++ b/tests/test_stdio.py
+@@ -0,0 +1,16 @@
++from __future__ import annotations
++
++import io
++import sys
++
++from stdio import configure_stdio
++
++
++def test_configure_stdio_allows_arrows_on_cp1252(monkeypatch):
++    buf = io.BytesIO()
++    fake = io.TextIOWrapper(buf, encoding="cp1252", errors="strict", write_through=True)
++    monkeypatch.setattr(sys, "stdout", fake)
++    configure_stdio()
++    print("extracting 1 segment(s) ΓåÆ clips/")
++    fake.flush()
++    assert "ΓåÆ" in buf.getvalue().decode("utf-8")

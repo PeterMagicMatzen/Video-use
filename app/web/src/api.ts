@@ -1,4 +1,4 @@
-export const API = "http://127.0.0.1:8787";
+export const API = import.meta.env.DEV ? "http://127.0.0.1:8787" : "";
 
 export async function getState() {
   const r = await fetch(`${API}/api/state`);
@@ -105,8 +105,31 @@ export async function postTranscribe() {
   if (!r.ok) throw new Error(await r.text());
 }
 
-export async function postAutoEdit() {
-  const r = await fetch(`${API}/api/auto-edit`, { method: "POST" });
+export async function postAutoEdit(variation?: string) {
+  const r = await fetch(`${API}/api/auto-edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ variation: variation || "energy" }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function postAutoVoices(variation?: string) {
+  const r = await fetch(`${API}/api/auto-voices`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ variation: variation || "energy" }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function postUndo() {
+  const r = await fetch(`${API}/api/undo`, { method: "POST" });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function postStripClaude() {
+  const r = await fetch(`${API}/api/strip-claude`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
 }
 

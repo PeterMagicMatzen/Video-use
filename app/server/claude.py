@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import queue
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -30,11 +31,23 @@ Then stop. Do not render.
 """
 
 
+def _claude_bin() -> str:
+    """Prefer Claude Code CLI, never the Windows Store desktop app."""
+    home = Path.home()
+    for candidate in (
+        home / ".local" / "bin" / "claude.exe",
+        home / ".local" / "bin" / "claude.EXE",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return "claude"
+
+
 def claude_cmd(*, folder: Path, session_id: str | None, prompt: str) -> list[str]:
     # -p must be followed by the prompt. --add-dir is variadic and will
     # swallow a trailing prompt if it comes last.
     cmd = [
-        "claude",
+        _claude_bin(),
         "-p",
         prompt,
         "--verbose",
@@ -111,12 +124,15 @@ def _delta_or_partial_text(data: dict) -> list[str]:
     return out
 
 
-def stream_claude(*, folder: Path, prompt: str, session: dict) -> Iterator[str]:
+def stream_claude(*, folder: Path, prompt: str, session: dict, resume: bool = True) -> Iterator[str]:
     cmd = claude_cmd(
         folder=folder,
-        session_id=session.get("claude_session_id"),
+        session_id=session.get("claude_session_id") if resume else None,
         prompt=prompt,
     )
+    hidden = 0
+    if sys.platform == "win32":
+        hidden = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -127,10 +143,11 @@ def stream_claude(*, folder: Path, prompt: str, session: dict) -> Iterator[str]:
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        creationflags=hidden,
     )
     job = session.get("job")
     if isinstance(job, dict):
-        job["pid"] = proc.pid
+        job["claude_pid"] = proc.pid
         save_session(folder, session)
 
     lines: queue.Queue[str | None] = queue.Queue()

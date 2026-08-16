@@ -1,0 +1,94 @@
+﻿4c9fe4c docs: Windows install and local app launcher
+ README.md           |  7 +++++++
+ app/scripts/dev.ps1 |  8 ++++++++
+ install.md          | 18 ++++++++++++++++++
+ 3 files changed, 33 insertions(+)
+diff --git a/README.md b/README.md
+index 0f7b264..530bb0a 100644
+--- a/README.md
++++ b/README.md
+@@ -61,20 +61,27 @@ ln -sfn ~/Developer/video-use ~/.claude/skills/video-use        # Claude Code
+ cd ~/Developer/video-use
+ uv sync                         # or: pip install -e .
+ brew install ffmpeg             # required
+ brew install yt-dlp             # optional, for downloading online sources
+ 
+ # 3. Add your ElevenLabs API key
+ cp .env.example .env
+ $EDITOR .env                    # ELEVENLABS_API_KEY=...
+ ```
+ 
++### Local app (Windows)
++
++Windows users can run the local app via `app/scripts/dev.ps1` after
++`pip install -e ".[app]"`. See `install.md` for full Windows setup
++(ffmpeg via winget, skill junction, and launch).
++
++
+ ## How it works
+ 
+ The LLM never watches the video. It **reads** it ΓÇö through two layers that together give it everything it needs to cut with word-boundary precision.
+ 
+ <p align="center">
+   <img src="static/timeline-view.svg" alt="timeline_view composite ΓÇö filmstrip + speaker track + waveform + word labels + silence-gap cut candidates" width="100%">
+ </p>
+ 
+ **Layer 1 ΓÇö Audio transcript (always loaded).** One ElevenLabs Scribe call per source gives word-level timestamps, speaker diarization, and audio events (`(laughter)`, `(applause)`, `(sigh)`). All takes pack into a single ~12KB `takes_packed.md` ΓÇö the LLM's primary reading view.
+ 
+diff --git a/app/scripts/dev.ps1 b/app/scripts/dev.ps1
+new file mode 100644
+index 0000000..68527e2
+--- /dev/null
++++ b/app/scripts/dev.ps1
+@@ -0,0 +1,8 @@
++$ErrorActionPreference = "Stop"
++$root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
++Set-Location $root
++
++Start-Process -NoNewWindow -FilePath "python" -ArgumentList "-m", "uvicorn", "app.server.main:app", "--host", "127.0.0.1", "--port", "8787", "--reload"
++Set-Location (Join-Path $root "app\web")
++if (-not (Test-Path "node_modules")) { npm install }
++npm run dev
+diff --git a/install.md b/install.md
+index b3b4d7f..aaaa526 100644
+--- a/install.md
++++ b/install.md
+@@ -58,20 +58,38 @@ command -v ffmpeg >/dev/null || brew install ffmpeg
+ command -v yt-dlp >/dev/null || brew install yt-dlp     # optional
+ 
+ # Debian / Ubuntu
+ # sudo apt-get update && sudo apt-get install -y ffmpeg
+ # pip install yt-dlp
+ 
+ # Arch
+ # sudo pacman -S ffmpeg yt-dlp
+ ```
+ 
++### Windows
++
++```powershell
++# ffmpeg full build (has libass / subtitles)
++winget install Gyan.FFmpeg
++
++# Python extras for the local app
++cd $HOME\Developer\video-use
++pip install -e ".[app,dev]"
++
++# Skill junction (already present on this machine; recreate if needed)
++New-Item -ItemType Junction -Path "$HOME\.claude\skills\video-use" -Target "$HOME\Developer\video-use" -Force
++
++# Launch the local app
++powershell -File app\scripts\dev.ps1
++# UI: http://localhost:5173   API: http://127.0.0.1:8787
++```
++
+ If `brew` / `apt` / `pacman` requires a sudo prompt, tell the user the exact command and wait. Do not invent a password.
+ 
+ ### 4. Register the skill with the current agent
+ 
+ Figure out which agent you are running under, and register once. A symlink of the whole repo directory is the right shape ΓÇö helpers/ needs to sit next to SKILL.md.
+ 
+ - **Claude Code** (`~/.claude/` present):
+ 
+     ```bash
+     mkdir -p ~/.claude/skills

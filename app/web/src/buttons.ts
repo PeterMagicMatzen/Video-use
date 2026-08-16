@@ -11,6 +11,14 @@ export function canRenderFinal(state: string) {
   return state === "preview-ready";
 }
 
-export function canAutoEdit(state: string, packed: boolean) {
-  return packed && !["empty", "inventory", "transcribing", "rendering"].includes(state);
+export function canAutoEdit(state: string, packed: boolean, claudeOk = true) {
+  return claudeOk && packed && !["empty", "inventory", "transcribing", "rendering"].includes(state);
+}
+
+export function canAutoVoices(state: string, packed: boolean, claudeOk: boolean) {
+  return claudeOk && canAutoEdit(state, packed);
+}
+
+export function canGenerate(state: string, hasClip: boolean, claudeOk: boolean) {
+  return hasClip && claudeOk && !["transcribing", "rendering"].includes(state);
 }

@@ -65,6 +65,14 @@ def test_stale_after_chat(tmp_path: Path):
     assert derive_center_state(tmp_path, s) == "stale"
 
 
+def test_generate_job_shows_as_working(tmp_path: Path):
+    _folder(tmp_path, packed=True)
+    s = default_session(tmp_path)
+    s["job"]["kind"] = "generate"
+    s["job"]["phase"] = "directing"
+    assert derive_center_state(tmp_path, s) == "rendering"
+
+
 def test_preview_ready(tmp_path: Path):
     _folder(tmp_path, packed=True, edl=True, preview=True)
     s = default_session(tmp_path)

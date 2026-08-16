@@ -31,7 +31,7 @@ def load_session(folder: Path) -> dict:
     base.update(data)
     if not isinstance(base.get("job"), dict):
         base["job"] = default_session(folder)["job"]
-    return reclaim_job(base)
+    return reclaim_job(base, folder)
 
 
 def save_session(folder: Path, data: dict) -> None:
@@ -43,6 +43,8 @@ def save_session(folder: Path, data: dict) -> None:
 def pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
+    if os.name == "nt":
+        return _pid_alive_windows(int(pid))
     try:
         os.kill(pid, 0)
     except PermissionError:
@@ -52,11 +54,45 @@ def pid_alive(pid: int | None) -> bool:
     return True
 
 
-def reclaim_job(data: dict) -> dict:
+def _pid_alive_windows(pid: int) -> bool:
+    """os.kill(pid, 0) is not a liveness check on Windows (WinError 87)."""
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if handle:
+        kernel32.CloseHandle(handle)
+        return True
+    # 5 = ACCESS_DENIED: process exists
+    return kernel32.GetLastError() == 5
+
+
+_FRIENDLY_STOP = {
+    "transcribe": "Captions stopped. Tap Generate to try again.",
+    "claude": "Directing stopped. Tap Generate to try again.",
+    "render": "Export stopped. Tap Generate to try again.",
+    "generate": "Generate stopped. Tap Generate to try again.",
+}
+
+
+def reclaim_job(data: dict, folder: Path | None = None) -> dict:
     job = data.get("job") or {}
     kind = job.get("kind") or "idle"
-    pid = job.get("pid")
-    if kind != "idle" and pid and not pid_alive(int(pid)):
-        data["last_error"] = f"previous {kind} job died (pid {pid})"
-        data["job"] = {"kind": "idle", "pid": None, "started_at": None, "output": None, "log": None}
+    if kind == "idle":
+        return data
+    worker = job.get("worker_pid") or job.get("pid")
+    tracked = job.get("pid")
+    if (worker and pid_alive(int(worker))) or (tracked and pid_alive(int(tracked))):
+        return data
+    # Process is gone. If we already have a finished preview from this pass, stay quiet.
+    if folder is not None:
+        preview = folder / "edit" / "preview.mp4"
+        if preview.is_file() and kind in {"render", "generate", "claude"}:
+            data["job"] = {"kind": "idle", "pid": None, "started_at": None, "output": None, "log": None}
+            if data.get("last_error") and "pid" in str(data.get("last_error")).lower():
+                data["last_error"] = None
+            return data
+    # Worker is gone. Idle the job but do not invent a "Directing stopped"
+    # banner — that raced Generate and hid the real error (wrong transcript).
+    data["job"] = {"kind": "idle", "pid": None, "started_at": None, "output": None, "log": None}
     return data

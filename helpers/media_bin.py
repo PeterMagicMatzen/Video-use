@@ -30,7 +30,8 @@ def save_bin(edit_dir: Path, items: list[dict]) -> None:
 
 
 def probe_duration(path: Path) -> float:
-    proc = subprocess.run(
+    from hidden_proc import run as hidden_run
+    proc = hidden_run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",

@@ -20,7 +20,22 @@ def test_reclaim_dead_pid():
     out = reclaim_job(data)
     assert out["job"]["kind"] == "idle"
     assert out["job"]["pid"] is None
-    assert "render" in (out.get("last_error") or "")
+
+
+def test_reclaim_keeps_job_if_worker_pid_alive():
+    import os
+    data = default_session(Path("C:/footage"))
+    data["job"] = {
+        "kind": "claude",
+        "pid": 99999999,
+        "worker_pid": os.getpid(),
+        "started_at": "t",
+        "output": None,
+        "log": None,
+    }
+    out = reclaim_job(data)
+    assert out["job"]["kind"] == "claude"
+    assert out.get("last_error") is None
 
 
 def test_reclaim_keeps_live_pid():
@@ -34,3 +49,8 @@ def test_reclaim_keeps_live_pid():
 
 def test_pid_alive_false_for_none():
     assert pid_alive(None) is False
+
+
+def test_pid_alive_true_for_self():
+    import os
+    assert pid_alive(os.getpid()) is True

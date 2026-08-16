@@ -1,0 +1,136 @@
+﻿2043bca feat: persist edit/app_session.json and reclaim dead jobs
+ app/__init__.py        |  0
+ app/server/__init__.py |  0
+ app/server/paths.py    |  7 ++++++
+ app/server/session.py  | 62 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_session.py  | 36 +++++++++++++++++++++++++++++
+ 5 files changed, 105 insertions(+)
+diff --git a/app/__init__.py b/app/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/app/server/__init__.py b/app/server/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/app/server/paths.py b/app/server/paths.py
+new file mode 100644
+index 0000000..82e9c52
+--- /dev/null
++++ b/app/server/paths.py
+@@ -0,0 +1,7 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[2]
++HELPERS = REPO_ROOT / "helpers"
++APP_HOME = Path.home() / ".video-use"
+diff --git a/app/server/session.py b/app/server/session.py
+new file mode 100644
+index 0000000..3fbd8ad
+--- /dev/null
++++ b/app/server/session.py
+@@ -0,0 +1,62 @@
++from __future__ import annotations
++
++import json
++import os
++from pathlib import Path
++
++JOB_KINDS = ("idle", "transcribe", "claude", "render")
++
++
++def default_session(folder: Path) -> dict:
++    return {
++        "claude_session_id": None,
++        "folder": str(folder.resolve()),
++        "edl_approved_at": None,
++        "edl_mtime_at_approve": 0,
++        "last_error": None,
++        "job": {"kind": "idle", "pid": None, "started_at": None, "output": None, "log": None},
++    }
++
++
++def session_path(folder: Path) -> Path:
++    return folder / "edit" / "app_session.json"
++
++
++def load_session(folder: Path) -> dict:
++    path = session_path(folder)
++    if not path.exists():
++        return default_session(folder)
++    data = json.loads(path.read_text(encoding="utf-8"))
++    base = default_session(folder)
++    base.update(data)
++    if not isinstance(base.get("job"), dict):
++        base["job"] = default_session(folder)["job"]
++    return reclaim_job(base)
++
++
++def save_session(folder: Path, data: dict) -> None:
++    path = session_path(folder)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
++
++
++def pid_alive(pid: int | None) -> bool:
++    if not pid:
++        return False
++    try:
++        os.kill(pid, 0)
++    except PermissionError:
++        return True
++    except OSError:
++        return False
++    return True
++
++
++def reclaim_job(data: dict) -> dict:
++    job = data.get("job") or {}
++    kind = job.get("kind") or "idle"
++    pid = job.get("pid")
++    if kind != "idle" and pid and not pid_alive(int(pid)):
++        data["last_error"] = f"previous {kind} job died (pid {pid})"
++        data["job"] = {"kind": "idle", "pid": None, "started_at": None, "output": None, "log": None}
++    return data
+diff --git a/tests/test_session.py b/tests/test_session.py
+new file mode 100644
+index 0000000..0bc1cf0
+--- /dev/null
++++ b/tests/test_session.py
+@@ -0,0 +1,36 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from app.server.session import default_session, load_session, pid_alive, reclaim_job, save_session
++
++
++def test_roundtrip(tmp_path: Path):
++    data = default_session(tmp_path)
++    save_session(tmp_path, data)
++    loaded = load_session(tmp_path)
++    assert loaded["folder"] == str(tmp_path.resolve())
++    assert loaded["job"]["kind"] == "idle"
++    assert (tmp_path / "edit" / "app_session.json").exists()
++
++
++def test_reclaim_dead_pid():
++    data = default_session(Path("C:/footage"))
++    data["job"] = {"kind": "render", "pid": 99999999, "started_at": "t", "output": "x", "log": "y"}
++    out = reclaim_job(data)
++    assert out["job"]["kind"] == "idle"
++    assert out["job"]["pid"] is None
++    assert "render" in (out.get("last_error") or "")
++
++
++def test_reclaim_keeps_live_pid():
++    import os
++    data = default_session(Path("C:/footage"))
++    data["job"] = {"kind": "transcribe", "pid": os.getpid(), "started_at": "t", "output": None, "log": None}
++    out = reclaim_job(data)
++    assert out["job"]["kind"] == "transcribe"
++    assert out["job"]["pid"] == os.getpid()
++
++
++def test_pid_alive_false_for_none():
++    assert pid_alive(None) is False

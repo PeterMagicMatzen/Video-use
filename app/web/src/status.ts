@@ -25,8 +25,8 @@ export function headlineFor(state: string, hasCut: boolean): { kicker: string; t
     case "strategy-ready":
       return {
         kicker: "Step 3",
-        title: "Make the edit",
-        detail: "One click: jump cuts, captions, lower third, title cards. No Claude login needed.",
+        title: "Generate the cut",
+        detail: "One tap. Captions, cinematic cuts, and a Mixkit score — directed by Claude.",
       };
     case "rendering":
       return {
@@ -47,8 +47,6 @@ export function headlineFor(state: string, hasCut: boolean): { kicker: string; t
 
 export function stepIndex(state: string, hasCut: boolean): number {
   if (state === "empty") return 0;
-  if (state === "inventory" || state === "transcribing") return 1;
-  if (state === "rendering") return 2;
-  if (hasCut || state === "preview-ready") return 3;
-  return 2;
+  if (hasCut || state === "preview-ready") return 2;
+  return 1;
 }

@@ -1,0 +1,337 @@
+﻿65c9254 feat: validate EDL and fix Windows subtitle paths
+ helpers/edl.py    | 112 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ helpers/render.py |  27 ++++++++-----
+ tests/test_edl.py |  87 ++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 216 insertions(+), 10 deletions(-)
+diff --git a/helpers/edl.py b/helpers/edl.py
+new file mode 100644
+index 0000000..b815c83
+--- /dev/null
++++ b/helpers/edl.py
+@@ -0,0 +1,112 @@
++"""EDL validation and subtitle helpers used by render.py and the local app."""
++
++from __future__ import annotations
++
++import copy
++import sys
++from dataclasses import dataclass, field
++from pathlib import Path
++
++
++@dataclass
++class ValidationResult:
++    ok: bool
++    errors: list[str] = field(default_factory=list)
++    warnings: list[str] = field(default_factory=list)
++    edl: dict = field(default_factory=dict)
++
++
++def _resolve(maybe: str, edit_dir: Path) -> Path:
++    p = Path(maybe)
++    return p if p.is_absolute() else (edit_dir / p).resolve()
++
++
++def validate_edl(edl: dict, *, edit_dir: Path) -> ValidationResult:
++    out = copy.deepcopy(edl)
++    errors: list[str] = []
++    warnings: list[str] = []
++    sources = out.get("sources")
++    ranges = out.get("ranges")
++    if not isinstance(sources, dict) or not sources:
++        errors.append("sources must be a non-empty object")
++        return ValidationResult(False, errors, warnings, out)
++    if not isinstance(ranges, list) or not ranges:
++        errors.append("ranges must be a non-empty array")
++        return ValidationResult(False, errors, warnings, out)
++
++    total = 0.0
++    for i, r in enumerate(ranges):
++        if not isinstance(r, dict):
++            errors.append(f"ranges[{i}] must be an object")
++            continue
++        name = r.get("source")
++        if name not in sources:
++            errors.append(f"ranges[{i}].source {name!r} is not in sources")
++            continue
++        path = _resolve(str(sources[name]), edit_dir)
++        if not path.exists():
++            errors.append(f"source {name!r} file missing: {path}")
++        try:
++            start = float(r["start"])
++            end = float(r["end"])
++        except (KeyError, TypeError, ValueError):
++            errors.append(f"ranges[{i}] needs numeric start and end")
++            continue
++        if start < 0 or end <= start:
++            errors.append(f"ranges[{i}] requires 0 <= start < end (got {start}, {end})")
++            continue
++        total += end - start
++
++    overlays = out.get("overlays") or []
++    if overlays:
++        if not isinstance(overlays, list):
++            errors.append("overlays must be an array")
++        else:
++            for i, ov in enumerate(overlays):
++                if not isinstance(ov, dict) or "file" not in ov:
++                    errors.append(f"overlays[{i}] needs a file")
++                    continue
++                op = _resolve(str(ov["file"]), edit_dir)
++                if not op.exists():
++                    errors.append(f"overlay file missing: {op}")
++
++    stated = out.get("total_duration_s")
++    try:
++        stated_f = float(stated) if stated is not None else None
++    except (TypeError, ValueError):
++        stated_f = None
++    if stated_f is None or abs(stated_f - total) > 0.05:
++        warnings.append(f"total_duration_s corrected to {total:.3f}")
++        out["total_duration_s"] = round(total, 3)
++
++    return ValidationResult(ok=not errors, errors=errors, warnings=warnings, edl=out)
++
++
++def escape_subtitles_path(path: Path) -> str:
++    """Escape a Windows path for ffmpeg subtitles= filter (drive colon + specials)."""
++    s = str(path.resolve()).replace("\\", "/")
++    s = s.replace("\\", "/")
++    s = s.replace(":", r"\:")
++    s = s.replace("'", r"\'")
++    s = s.replace("[", r"\[")
++    s = s.replace("]", r"\]")
++    return s
++
++
++def default_subtitle_font() -> str:
++    return "Arial" if sys.platform == "win32" else "Helvetica"
++
++
++def force_style(*, font: str | None = None, extra: str | None = None) -> str:
++    name = font or default_subtitle_font()
++    if extra:
++        # EDL subtitle_style may be a full force_style or just a font name
++        if "FontName=" in extra:
++            return extra
++        name = extra
++    return (
++        f"FontName={name},FontSize=18,Bold=1,"
++        "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,"
++        "BorderStyle=1,Outline=2,Shadow=0,"
++        "Alignment=2,MarginV=90"
++    )
+diff --git a/helpers/render.py b/helpers/render.py
+index 8c5cfcd..90b6b82 100644
+--- a/helpers/render.py
++++ b/helpers/render.py
+@@ -41,26 +41,23 @@ except Exception:
+ # -------- Subtitle style (bold-overlay, proven at 1920├ù1080 and 1080├ù1920) --
+ #
+ # MarginV is NOT taste ΓÇö it is a platform safe-zone rule.
+ # TikTok / IG Reels / Shorts UI (caption, username, music, right-rail actions)
+ # covers roughly the bottom ~25ΓÇô30% of a 1080├ù1920 frame. Captions placed near
+ # the bottom edge get clipped or obscured by the UI. libass auto-scales the
+ # render canvas relative to PlayResY=288, so MarginV=90 lands the caption
+ # baseline roughly 30% up from the bottom on any aspect ΓÇö clear of the UI on
+ # every major vertical-video platform. Do not drop this below ~75 without a
+ # specific reason.
+-SUB_FORCE_STYLE = (
+-    "FontName=Helvetica,FontSize=18,Bold=1,"
+-    "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,"
+-    "BorderStyle=1,Outline=2,Shadow=0,"
+-    "Alignment=2,MarginV=90"
+-)
++from edl import force_style, escape_subtitles_path
++
++SUB_FORCE_STYLE = force_style()
+ 
+ # -------- Helpers ------------------------------------------------------------
+ 
+ 
+ def run(cmd: list[str], quiet: bool = False) -> None:
+     if not quiet:
+         print(f"  $ {' '.join(str(c) for c in cmd[:6])}{' ΓÇª' if len(cmd) > 6 else ''}")
+     subprocess.run(cmd, check=True)
+ 
+ 
+@@ -492,20 +489,21 @@ def apply_loudnorm_two_pass(
+ 
+ # -------- Final compositing (Rule 1 + Rule 4) -------------------------------
+ 
+ 
+ def build_final_composite(
+     base_path: Path,
+     overlays: list[dict],
+     subtitles_path: Path | None,
+     out_path: Path,
+     edit_dir: Path,
++    force_style_str: str = SUB_FORCE_STYLE,
+ ) -> None:
+     """Final pass: base ΓåÆ overlays (PTS-shifted) ΓåÆ subtitles LAST ΓåÆ out.
+ 
+     If there are no overlays and no subtitles, just copy base to out.
+     """
+     has_overlays = bool(overlays)
+     has_subs = subtitles_path is not None and subtitles_path.exists()
+ 
+     if not has_overlays and not has_subs:
+         # Nothing to do ΓÇö just rename/copy base to final name
+@@ -530,23 +528,23 @@ def build_final_composite(
+         dur = float(ov["duration"])
+         end = t + dur
+         next_label = f"[v{idx}]"
+         filter_parts.append(
+             f"{current}[a{idx}]overlay=enable='between(t,{t:.3f},{end:.3f})'{next_label}"
+         )
+         current = next_label
+ 
+     # Subtitles LAST ΓÇö Rule 1
+     if has_subs:
+-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
++        subs_abs = escape_subtitles_path(subtitles_path)
+         filter_parts.append(
+-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
++            f"{current}subtitles='{subs_abs}':force_style='{force_style_str}'[outv]"
+         )
+         out_label = "[outv]"
+     else:
+         # Rename the last overlay output to [outv] for consistency
+         if has_overlays:
+             filter_parts.append(f"{current}null[outv]")
+             out_label = "[outv]"
+         else:
+             out_label = "[0:v]"
+ 
+@@ -635,27 +633,36 @@ def main() -> None:
+             subs_path = edit_dir / "master.srt"
+             build_master_srt(edl, edit_dir, subs_path)
+         elif edl.get("subtitles"):
+             subs_path = resolve_path(edl["subtitles"], edit_dir)
+             if not subs_path.exists():
+                 print(f"warning: subtitles path in EDL does not exist: {subs_path}")
+                 subs_path = None
+ 
+     # 4. Composite (overlays + subtitles LAST) ΓåÆ intermediate (pre-loudnorm) path
+     overlays = edl.get("overlays") or []
++    style = (
++        force_style(extra=str(edl["subtitle_style"]))
++        if edl.get("subtitle_style")
++        else SUB_FORCE_STYLE
++    )
+     if args.no_loudnorm:
+         # Composite directly to final output
+-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
++        build_final_composite(
++            base_path, overlays, subs_path, out_path, edit_dir, force_style_str=style
++        )
+     else:
+         # Composite to a temp file, then run loudnorm ΓåÆ final output
+         tmp_composite = out_path.with_suffix(".prenorm.mp4")
+-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
++        build_final_composite(
++            base_path, overlays, subs_path, tmp_composite, edit_dir, force_style_str=style
++        )
+         print("loudness normalization ΓåÆ social-ready (-14 LUFS / -1 dBTP / LRA 11)")
+         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
+         tmp_composite.unlink(missing_ok=True)
+ 
+     size_mb = out_path.stat().st_size / (1024 * 1024)
+     print(f"\ndone: {out_path} ({size_mb:.1f} MB)")
+ 
+ 
+ if __name__ == "__main__":
+     main()
+diff --git a/tests/test_edl.py b/tests/test_edl.py
+new file mode 100644
+index 0000000..a6c0daf
+--- /dev/null
++++ b/tests/test_edl.py
+@@ -0,0 +1,87 @@
++from __future__ import annotations
++
++import sys
++from pathlib import Path
++
++import pytest
++
++from edl import default_subtitle_font, escape_subtitles_path, force_style, validate_edl
++
++
++def _edl(tmp: Path, **over):
++    src = tmp / "C0103.MP4"
++    src.write_bytes(b"x")
++    base = {
++        "version": 1,
++        "sources": {"C0103": str(src)},
++        "ranges": [{"source": "C0103", "start": 2.42, "end": 6.85, "beat": "HOOK", "quote": "x", "reason": "y"}],
++        "grade": "none",
++        "overlays": [],
++        "total_duration_s": 4.43,
++    }
++    base.update(over)
++    return base
++
++
++def test_valid(tmp_path: Path):
++    result = validate_edl(_edl(tmp_path), edit_dir=tmp_path)
++    assert result.ok
++    assert result.errors == []
++
++
++def test_unknown_source(tmp_path: Path):
++    edl = _edl(tmp_path)
++    edl["ranges"][0]["source"] = "NOPE"
++    result = validate_edl(edl, edit_dir=tmp_path)
++    assert not result.ok
++    assert any("NOPE" in e for e in result.errors)
++
++
++def test_missing_source_file(tmp_path: Path):
++    edl = _edl(tmp_path)
++    edl["sources"]["C0103"] = str(tmp_path / "missing.mp4")
++    result = validate_edl(edl, edit_dir=tmp_path)
++    assert not result.ok
++
++
++def test_start_not_less_than_end(tmp_path: Path):
++    edl = _edl(tmp_path)
++    edl["ranges"][0]["start"] = 6.85
++    edl["ranges"][0]["end"] = 2.42
++    result = validate_edl(edl, edit_dir=tmp_path)
++    assert not result.ok
++
++
++def test_total_duration_autocorrect(tmp_path: Path):
++    edl = _edl(tmp_path, total_duration_s=99.0)
++    result = validate_edl(edl, edit_dir=tmp_path)
++    assert result.ok
++    assert result.warnings
++    assert result.edl["total_duration_s"] == pytest.approx(4.43, abs=0.001)
++
++
++def test_missing_overlay_file(tmp_path: Path):
++    edl = _edl(tmp_path, overlays=[{"file": "animations/slot_1/render.mp4", "start_in_output": 0, "duration": 5}])
++    result = validate_edl(edl, edit_dir=tmp_path)
++    assert not result.ok
++
++
++def test_escape_windows_drive():
++    escaped = escape_subtitles_path(Path(r"C:\Users\Varun B\takes\edit\master.srt"))
++    assert escaped.startswith("C\\:")
++    assert ":" not in escaped.replace("\\:", "")
++    assert "Varun B" in escaped or "Varun\\ B" in escaped
++    assert "master.srt" in escaped
++
++
++def test_default_font_windows(monkeypatch):
++    monkeypatch.setattr(sys, "platform", "win32")
++    assert default_subtitle_font() == "Arial"
++    monkeypatch.setattr(sys, "platform", "darwin")
++    assert default_subtitle_font() == "Helvetica"
++
++
++def test_force_style_uses_font():
++    style = force_style(font="Arial")
++    assert "FontName=Arial" in style
++    assert "MarginV=90" in style

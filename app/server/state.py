@@ -11,10 +11,12 @@ CENTER_STATES = (
 
 
 def derive_center_state(folder: Path, session: dict) -> str:
-    job_kind = (session.get("job") or {}).get("kind")
-    if job_kind == "transcribe":
+    job = session.get("job") or {}
+    job_kind = job.get("kind")
+    phase = job.get("phase")
+    if job_kind == "transcribe" or (job_kind == "generate" and phase == "transcribe"):
         return "transcribing"
-    if job_kind == "render":
+    if job_kind in {"render", "claude", "generate"}:
         return "rendering"
     if not folder.exists() or not find_videos(folder):
         return "empty"
@@ -24,7 +26,7 @@ def derive_center_state(folder: Path, session: dict) -> str:
     preview = edit / "preview.mp4"
     if not packed.exists():
         return "inventory"
-    if session.get("last_error"):
+    if session.get("last_error") and not preview.exists():
         return "error"
     if not edl.exists():
         return "packed"

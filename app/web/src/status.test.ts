@@ -3,7 +3,7 @@ import { headlineFor, stepIndex } from "./status";
 
 describe("status copy", () => {
   it("treats a finished cut as the last step", () => {
-    expect(stepIndex("preview-ready", true)).toBe(3);
+    expect(stepIndex("preview-ready", true)).toBe(2);
     expect(headlineFor("preview-ready", true).title).toMatch(/cut is done/i);
   });
   it("asks for a clip when empty", () => {

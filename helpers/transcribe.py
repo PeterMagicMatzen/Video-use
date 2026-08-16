@@ -52,7 +52,8 @@ def extract_audio(video_path: Path, dest: Path) -> None:
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
         str(dest),
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    from hidden_proc import run as hidden_run
+    hidden_run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def call_scribe(

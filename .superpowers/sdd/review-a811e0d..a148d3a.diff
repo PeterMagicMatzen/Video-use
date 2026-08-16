@@ -1,0 +1,255 @@
+﻿a148d3a fix: do not retry chat when state refresh fails
+9612894 feat: stream Claude chat into the review UI
+ app/web/src/App.tsx | 86 ++++++++++++++++++++++++++++++++++++++---------------
+ app/web/src/api.ts  | 52 +++++++++++++++++++++++---------
+ 2 files changed, 100 insertions(+), 38 deletions(-)
+diff --git a/app/web/src/App.tsx b/app/web/src/App.tsx
+index 26a87c5..d3f558d 100644
+--- a/app/web/src/App.tsx
++++ b/app/web/src/App.tsx
+@@ -1,24 +1,25 @@
+ import { useCallback, useEffect, useState } from "react";
+ import {
+   API,
+   getDoctor,
+   getRecents,
+   getState,
+   postApprove,
+-  postChat,
+   postFolder,
+   postFolderBrowse,
+   postOpenEdit,
+   postReject,
+   postRenderFinal,
+   postTranscribe,
++  retryChat,
++  streamChat,
+ } from "./api";
+ import { canApprove, canChat, canRenderFinal, canTranscribe } from "./buttons";
+ import type { Doctor, ProjectPayload } from "./types";
+ import "./App.css";
+ 
+ type ChatLine = { role: "user" | "assistant"; text: string };
+ 
+ function fmtDur(s: number | null): string {
+   if (s == null || Number.isNaN(s)) return "ΓÇö";
+   return `${s.toFixed(1)}s`;
+@@ -36,20 +37,21 @@ function errText(err: unknown): string {
+ export default function App() {
+   const [payload, setPayload] = useState<ProjectPayload | null>(null);
+   const [doctor, setDoctor] = useState<Doctor | null>(null);
+   const [recents, setRecents] = useState<string[]>([]);
+   const [path, setPath] = useState("");
+   const [busy, setBusy] = useState(false);
+   const [actionError, setActionError] = useState<string | null>(null);
+   const [draft, setDraft] = useState("");
+   const [chatLog, setChatLog] = useState<ChatLine[]>([]);
+   const [chatNotice, setChatNotice] = useState<string | null>(null);
++  const [chatRetry, setChatRetry] = useState(false);
+ 
+   const applyPayload = useCallback((next: ProjectPayload) => {
+     setPayload(next);
+     setDoctor(next.doctor);
+     setRecents(next.recents);
+     setPath(next.folder);
+   }, []);
+ 
+   const refresh = useCallback(async () => {
+     const state = await getState();
+@@ -104,20 +106,55 @@ export default function App() {
+   function openPath(next: string) {
+     const trimmed = next.trim();
+     if (!trimmed) return;
+     return run(async () => {
+       applyPayload((await postFolder(trimmed)) as ProjectPayload);
+     });
+   }
+ 
+   const chatOn = canChat(center, doctorOk);
+ 
++  function makeAppender() {
++    let started = false;
++    return (t: string) => {
++      setChatLog((log) => {
++        const last = log[log.length - 1];
++        if (started && last?.role === "assistant") {
++          return [...log.slice(0, -1), { role: "assistant", text: last.text + t }];
++        }
++        return [...log, { role: "assistant", text: t }];
++      });
++      started = true;
++    };
++  }
++
++  async function runChat(fn: (onText: (t: string) => void) => Promise<void>) {
++    setChatNotice(null);
++    setChatRetry(false);
++    setBusy(true);
++    try {
++      await fn(makeAppender());
++    } catch (err) {
++      setChatNotice(errText(err));
++      setChatRetry(true);
++      setBusy(false);
++      return;
++    }
++    try {
++      await refresh();
++    } catch (err) {
++      setActionError(errText(err));
++    } finally {
++      setBusy(false);
++    }
++  }
++
+   return (
+     <div className="app">
+       <aside className="col left">
+         <h1>video-use</h1>
+         <ul className="doctor">
+           {checks.map((c) => (
+             <li key={c.name} className={c.ok ? "ok" : "bad"}>
+               {c.name}
+             </li>
+           ))}
+@@ -234,41 +271,42 @@ export default function App() {
+             </p>
+           ))}
+         </div>
+         {chatNotice ? <p className="error">{chatNotice}</p> : null}
+         <textarea
+           value={draft}
+           disabled={!chatOn || busy}
+           onChange={(e) => setDraft(e.target.value)}
+           placeholder={chatOn ? "Strategy notesΓÇª" : "Chat disabled until packed"}
+         />
+-        <button
+-          type="button"
+-          disabled={busy || !chatOn || !draft.trim()}
+-          onClick={() => {
+-            const message = draft.trim();
+-            if (!message) return;
+-            setDraft("");
+-            setChatNotice(null);
+-            setChatLog((log) => [...log, { role: "user", text: message }]);
+-            void run(async () => {
+-              const result = await postChat(message);
+-              if (!result.connected) {
+-                setChatNotice("chat not connected");
+-                return;
+-              }
+-              if (result.text) {
+-                setChatLog((log) => [...log, { role: "assistant", text: result.text }]);
+-              }
+-            });
+-          }}
+-        >
+-          Send
+-        </button>
++        <div className="actions">
++          <button
++            type="button"
++            disabled={busy || !chatOn || !draft.trim()}
++            onClick={() => {
++              const message = draft.trim();
++              if (!message) return;
++              setDraft("");
++              setChatLog((log) => [...log, { role: "user", text: message }]);
++              void runChat((onText) => streamChat(message, onText));
++            }}
++          >
++            Send
++          </button>
++          <button
++            type="button"
++            disabled={busy || !chatOn || !chatRetry}
++            onClick={() => {
++              void runChat((onText) => retryChat(onText));
++            }}
++          >
++            Retry
++          </button>
++        </div>
+       </aside>
+     </div>
+   );
+ }
+ 
+ function errorText(sessionError: string | null | undefined, local: string | null): string | null {
+   return sessionError || local;
+ }
+diff --git a/app/web/src/api.ts b/app/web/src/api.ts
+index b2d8e75..081627a 100644
+--- a/app/web/src/api.ts
++++ b/app/web/src/api.ts
+@@ -59,32 +59,56 @@ export async function postRenderFinal() {
+ 
+ export async function postReject(note: string) {
+   const r = await fetch(`${API}/api/reject`, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+     body: JSON.stringify({ note }),
+   });
+   if (!r.ok) throw new Error(await r.text());
+ }
+ 
+-/** JSON fallback if the route is not SSE. Streaming tokens is Task 12. */
+-export async function postChat(message: string): Promise<{ connected: boolean; text: string }> {
++export async function streamChat(message: string, onText: (t: string) => void) {
+   const r = await fetch(`${API}/api/chat`, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+     body: JSON.stringify({ message }),
+   });
+-  if (r.status === 404) return { connected: false, text: "" };
+-  if (!r.ok) throw new Error(await r.text());
+-  const ctype = r.headers.get("content-type") || "";
+-  if (ctype.includes("application/json")) {
+-    try {
+-      const json = (await r.json()) as { text?: string };
+-      return { connected: true, text: typeof json.text === "string" ? json.text : "" };
+-    } catch {
+-      return { connected: true, text: "" };
++  if (!r.ok || !r.body) throw new Error(await r.text());
++  const reader = r.body.getReader();
++  const dec = new TextDecoder();
++  let buf = "";
++  while (true) {
++    const { done, value } = await reader.read();
++    if (done) break;
++    buf += dec.decode(value, { stream: true });
++    const parts = buf.split("\n\n");
++    buf = parts.pop() || "";
++    for (const part of parts) {
++      const line = part.replace(/^data:\s*/, "");
++      if (!line) continue;
++      const ev = JSON.parse(line);
++      if (ev.text) onText(ev.text);
++    }
++  }
++}
++
++/** Same SSE reader loop as streamChat, against POST /api/chat/retry. */
++export async function retryChat(onText: (t: string) => void) {
++  const r = await fetch(`${API}/api/chat/retry`, { method: "POST" });
++  if (!r.ok || !r.body) throw new Error(await r.text());
++  const reader = r.body.getReader();
++  const dec = new TextDecoder();
++  let buf = "";
++  while (true) {
++    const { done, value } = await reader.read();
++    if (done) break;
++    buf += dec.decode(value, { stream: true });
++    const parts = buf.split("\n\n");
++    buf = parts.pop() || "";
++    for (const part of parts) {
++      const line = part.replace(/^data:\s*/, "");
++      if (!line) continue;
++      const ev = JSON.parse(line);
++      if (ev.text) onText(ev.text);
+     }
+   }
+-  // Drain SSE so the turn can finish; UI polls GET /api/state until job.idle.
+-  void r.text();
+-  return { connected: true, text: "" };
+ }

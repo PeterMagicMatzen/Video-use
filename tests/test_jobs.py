@@ -66,8 +66,10 @@ def test_failed_preview_render_keeps_last_good_file(tmp_path: Path, monkeypatch)
             stderr="ffmpeg exploded\n" + "\n".join(f"line {i}" for i in range(50)),
         )
 
+    from app.server import jobs as jobs_mod
     from app.server import proc as proc_mod
     monkeypatch.setattr(proc_mod, "run_helper", fake_run_helper)
+    monkeypatch.setattr(jobs_mod, "spawn_job", lambda kind, folder: jobs_mod.run_render_sync(folder, preview=kind == "render-preview") or 1)
     start_render(tmp_path, preview=True)
 
     deadline = time.time() + 5

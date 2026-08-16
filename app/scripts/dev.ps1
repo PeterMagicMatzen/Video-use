@@ -1,13 +1,5 @@
-# If Restricted policy blocks this script: powershell -ExecutionPolicy Bypass -File app\scripts\dev.ps1
+# Single-process app. Prefer the Desktop shortcut (launch.cmd).
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $root
-
-Start-Process -NoNewWindow -FilePath "python" -ArgumentList "-m", "uvicorn", "app.server.main:app", "--host", "127.0.0.1", "--port", "8787"
-Start-Job -ScriptBlock {
-    Start-Sleep -Seconds 3
-    Start-Process "http://localhost:5173"
-} | Out-Null
-Set-Location (Join-Path $root "app\web")
-if (-not (Test-Path "node_modules")) { npm install }
-npm run dev
+& (Join-Path $PSScriptRoot "launch.cmd")

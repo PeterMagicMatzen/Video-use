@@ -38,6 +38,13 @@ export type EdlRange = {
   beat?: string;
   quote?: string;
   reason?: string;
+  zoom?: number;
+};
+
+export type CutVariation = {
+  id: string;
+  label: string;
+  detail: string;
 };
 
 export type Edl = {
@@ -52,7 +59,9 @@ export type Edl = {
 
 export type Job = {
   kind: string;
+  phase?: string;
   pid: number | null;
+  worker_pid?: number | null;
   started_at: string | null;
   output: string | null;
   log: string | null;
@@ -75,6 +84,9 @@ export type ProjectPayload = {
   stale: boolean;
   auto_edit_enabled?: boolean;
   bin?: BinItem[];
+  can_undo?: boolean;
+  variation?: string;
+  variations?: CutVariation[];
 };
 
 export type SfxItem = {
