@@ -11,7 +11,9 @@ from app.server.paths import REPO_ROOT
 def test_first_turn_has_no_resume(tmp_path: Path):
     cmd = claude_cmd(folder=tmp_path, session_id=None, prompt="hello")
     assert cmd[0] == "claude"
-    assert "-p" in cmd
+    assert cmd[1] == "-p"
+    assert cmd[2] == "hello"
+    assert cmd.count("hello") == 1
     assert "--continue" not in cmd
     assert "--resume" not in cmd
     assert "--dangerously-skip-permissions" not in cmd
@@ -31,9 +33,12 @@ def test_first_turn_has_no_resume(tmp_path: Path):
 
 def test_later_turn_resumes(tmp_path: Path):
     cmd = claude_cmd(folder=tmp_path, session_id="abc-123", prompt="more")
+    assert cmd[1] == "-p"
+    assert cmd[2] == "more"
     assert "--resume" in cmd
     assert "abc-123" in cmd
     assert "--continue" not in cmd
+    assert cmd.index("--add-dir") > cmd.index("more")
 
 
 def test_parse_session_id():

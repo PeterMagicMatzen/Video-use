@@ -31,9 +31,12 @@ Then stop. Do not render.
 
 
 def claude_cmd(*, folder: Path, session_id: str | None, prompt: str) -> list[str]:
+    # -p must be followed by the prompt. --add-dir is variadic and will
+    # swallow a trailing prompt if it comes last.
     cmd = [
         "claude",
         "-p",
+        prompt,
         "--output-format",
         "stream-json",
         "--permission-mode",
@@ -45,13 +48,12 @@ def claude_cmd(*, folder: Path, session_id: str | None, prompt: str) -> list[str
         "--disallowedTools",
         "Bash,WebSearch,WebFetch,Agent",
         "--add-dir",
-        str(folder),
+        str(folder.resolve()),
         "--add-dir",
         str(REPO_ROOT),
     ]
     if session_id:
         cmd.extend(["--resume", session_id])
-    cmd.append(prompt)
     return cmd
 
 
