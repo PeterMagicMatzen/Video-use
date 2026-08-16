@@ -8,12 +8,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.server.claude import ensure_single_claude, stream_claude
-from app.server.inventory import inventory
-from app.server.jobs import start_transcribe
+from app.server.inventory import find_videos, inventory
+from app.server.jobs import start_approve_and_preview, start_render, start_transcribe
 from app.server.paths import HELPERS
 from app.server.recents import add_recent, load_recents
 from app.server.session import load_session, save_session, session_path
@@ -270,3 +270,58 @@ def post_reject(body: RejectBody) -> dict:
     session["pending_note"] = body.note
     save_session(folder, session)
     return {"ok": True}
+
+
+def _job_http_error(exc: RuntimeError) -> HTTPException:
+    msg = str(exc)
+    code = 409 if "busy" in msg.lower() else 400
+    return HTTPException(status_code=code, detail=msg)
+
+
+@app.post("/api/approve", status_code=202)
+def post_approve() -> dict:
+    if CURRENT_FOLDER is None:
+        raise HTTPException(status_code=409, detail="no folder open")
+    try:
+        return start_approve_and_preview(CURRENT_FOLDER)
+    except RuntimeError as exc:
+        raise _job_http_error(exc) from exc
+
+
+@app.post("/api/render-final", status_code=202)
+def post_render_final() -> dict:
+    if CURRENT_FOLDER is None:
+        raise HTTPException(status_code=409, detail="no folder open")
+    try:
+        return start_render(CURRENT_FOLDER, preview=False)
+    except RuntimeError as exc:
+        raise _job_http_error(exc) from exc
+
+
+@app.get("/api/media/preview")
+def get_media_preview():
+    folder = _require_open_folder()
+    path = folder / "edit" / "preview.mp4"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="preview not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.get("/api/media/final")
+def get_media_final():
+    folder = _require_open_folder()
+    path = folder / "edit" / "final.mp4"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="final not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.get("/api/media/source/{name}")
+def get_media_source(name: str):
+    folder = _require_open_folder()
+    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+        raise HTTPException(status_code=404, detail="source not found")
+    match = next((p for p in find_videos(folder) if p.name == name), None)
+    if match is None or not match.is_file():
+        raise HTTPException(status_code=404, detail="source not found")
+    return FileResponse(match)

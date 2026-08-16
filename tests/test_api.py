@@ -74,3 +74,14 @@ def test_transcribe_409_when_busy(client: TestClient, tmp_path: Path):
     save_session(tmp_path, s)
     r = client.post("/api/transcribe")
     assert r.status_code == 409
+
+
+def test_approve_route_exists(client: TestClient, tmp_path: Path, monkeypatch):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    (tmp_path / "edit").mkdir()
+    (tmp_path / "edit" / "takes_packed.md").write_text("x", encoding="utf-8")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    import app.server.main as main_mod
+    monkeypatch.setattr(main_mod, "start_approve_and_preview", lambda folder: {"accepted": True})
+    r = client.post("/api/approve")
+    assert r.status_code == 202
