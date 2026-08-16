@@ -2,18 +2,11 @@
 
 Two modes:
 
-  1. Preset mode — pick a named preset (e.g. `warm_cinematic`, `neutral_punch`).
-     Simple fixed filter chain applied uniformly.
+  1. Preset mode — named looks. Default names (`none`, `natural`) apply
+     no filter. `cinematic` is a 2% contrast tick with no hue shift.
 
-  2. Auto mode (DEFAULT) — analyze the clip mathematically and emit a subtle
-     per-clip correction. Samples N frames via ffmpeg, computes mean brightness,
-     RMS contrast, saturation. Emits a bounded filter string that corrects
-     under-exposure, flatness, and mild desaturation without applying any
-     creative color shift. All adjustments capped at ±8% on any axis.
-
-     The goal is "make it look clean without looking graded". Never applies
-     creative LUTs, teal/orange splits, or filmic curves. For creative looks,
-     use `--preset warm_cinematic` explicitly.
+  2. Auto mode — correct only broken exposure. Well-shot footage gets
+     no filter. Caps are ±3%. No hue shift, no saturation change.
 
 Usage:
     python helpers/grade.py <input> -o <output>                   # auto mode
@@ -36,30 +29,21 @@ from pathlib import Path
 
 
 PRESETS: dict[str, str] = {
-    # Subtle baseline — barely perceptible cleanup. No color shift.
-    # Use when auto-analysis isn't available or when you want a safe floor.
-    "subtle": "eq=contrast=1.03:saturation=0.98",
-
-    # Minimal corrective grade: light contrast + subtle S-curve, no color shifts.
-    "neutral_punch": (
-        "eq=contrast=1.06:brightness=0.0:saturation=1.0,"
-        "curves=master='0/0 0.25/0.23 0.75/0.77 1/1'"
-    ),
-
-    # OPT-IN creative preset for retro/cinematic looks ONLY. Not a default.
-    # +12% contrast, crushed blacks, -12% sat, warm shadows + cool highs, filmic curve.
-    # Originally from HEURISTICS §6 — too aggressive for standard launch content.
-    "warm_cinematic": (
-        "eq=contrast=1.12:brightness=-0.02:saturation=0.88,"
-        "colorbalance="
-        "rs=0.02:gs=0.0:bs=-0.03:"
-        "rm=0.04:gm=0.01:bm=-0.02:"
-        "rh=0.08:gh=0.02:bh=-0.05,"
-        "curves=master='0/0 0.25/0.22 0.75/0.78 1/1'"
-    ),
-
-    # Flat — no grade. Useful as a sentinel for "skip grading this source".
+    # Default look: the source, unchanged. Skin and rooms stay as shot.
     "none": "",
+    "natural": "",
+    "subtle": "",
+
+    # Barely-there cinematic: a whisper of midtone contrast, no hue shift,
+    # no sat pull, no crushed blacks. Should not read as "graded".
+    "cinematic": "eq=contrast=1.02:gamma=1.01:saturation=1.0",
+
+    # Kept as a name so old EDLs still resolve. Same as cinematic — the
+    # old teal/orange + crushed-black look is gone.
+    "warm_cinematic": "eq=contrast=1.02:gamma=1.01:saturation=1.0",
+
+    # Tiny contrast only. No S-curve. Used to be a punchy film curve.
+    "neutral_punch": "eq=contrast=1.02:saturation=1.0",
 }
 
 
@@ -181,15 +165,13 @@ def auto_grade_for_clip(
     duration: float | None = None,
     verbose: bool = False,
 ) -> tuple[str, dict[str, float]]:
-    """Analyze a clip range and emit a subtle per-clip correction filter.
+    """Analyze a clip range and emit a correction only if the image is broken.
 
-    Returns (filter_string, stats_dict). The filter is bounded to ±8% on any axis
-    and applies NO color shift. It only addresses:
-      - Underexposure (lift gamma slightly if too dark)
-      - Flatness (tiny contrast boost if range is narrow)
-      - Desaturation (tiny sat boost if extremely flat)
-
-    If the clip is already well-balanced, returns the baseline `subtle` preset.
+    Returns (filter_string, stats_dict). Well-exposed footage gets an empty
+    filter — we do not "make it cinematic". Caps are ±3%. No hue shift,
+    no saturation change. Only:
+      - Severe underexposure (y_mean < 0.30) → tiny gamma lift
+      - Extremely flat range (y_range < 0.45) → tiny contrast
     """
     if duration is None:
         # Probe duration
@@ -211,42 +193,24 @@ def auto_grade_for_clip(
     sat_mean = stats["sat_mean"]
 
     # ------ Decision rules ---------------------------------------------------
-    # All caps bounded to ±8%. Target "clean, not graded".
+    # Leave well-exposed footage alone. Never grade for taste.
 
-    # Contrast: target y_range ≈ 0.72. Boost gently if flat, never reduce.
     contrast_adj = 1.0
-    if y_range < 0.65:
-        # Map [0.50, 0.65] → [1.08, 1.03]
-        t = max(0.0, min(1.0, (y_range - 0.50) / 0.15))
-        contrast_adj = 1.08 - 0.05 * t
-    else:
-        contrast_adj = 1.03  # subtle baseline
+    if y_range < 0.45:
+        t = max(0.0, min(1.0, (y_range - 0.30) / 0.15))
+        contrast_adj = 1.03 - 0.03 * t
 
-    # Gamma: target y_mean ≈ 0.48. Lift gently if too dark.
     gamma_adj = 1.0
-    if y_mean < 0.42:
-        # Map [0.30, 0.42] → [1.10, 1.02]
-        t = max(0.0, min(1.0, (y_mean - 0.30) / 0.12))
-        gamma_adj = 1.10 - 0.08 * t
-    elif y_mean > 0.60:
-        # Slightly overexposed — tiny pullback
-        gamma_adj = 0.97
+    if y_mean < 0.30:
+        t = max(0.0, min(1.0, (y_mean - 0.18) / 0.12))
+        gamma_adj = 1.03 - 0.03 * t
 
-    # Saturation: target sat_mean ≈ 0.25. Never desaturate aggressively;
-    # modest boost if very flat. Default to 0.98 (tiny pullback — most digital
-    # video is slightly over-saturated on consumer displays).
-    sat_adj = 0.98
-    if sat_mean < 0.18:
-        # Very flat — tiny boost
-        sat_adj = 1.04
-    elif sat_mean > 0.38:
-        # Already punchy — hold
-        sat_adj = 0.96
+    sat_adj = 1.0
+    _ = sat_mean  # saturation is never touched
 
-    # Clamp all adjustments hard
-    contrast_adj = max(0.94, min(1.08, contrast_adj))
-    gamma_adj = max(0.94, min(1.10, gamma_adj))
-    sat_adj = max(0.94, min(1.06, sat_adj))
+    contrast_adj = max(1.0, min(1.03, contrast_adj))
+    gamma_adj = max(1.0, min(1.03, gamma_adj))
+    sat_adj = 1.0
 
     # Build filter string
     eq_parts = []

@@ -35,7 +35,7 @@ except Exception:
         return ""
 
     def auto_grade_for_clip(video, start=0.0, duration=None, verbose=False):  # type: ignore
-        return "eq=contrast=1.03:saturation=0.98", {}
+        return "", {}
 
 
 # -------- Subtitle style (bold-overlay, proven at 1920×1080 and 1080×1920) --

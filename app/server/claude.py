@@ -25,6 +25,7 @@ Write only under edit/.
 APPROVE_PROMPT = """STRATEGY_APPROVED
 Write edit/edl.json only, using the video-use schema (version, sources, ranges, grade, overlays, subtitles, total_duration_s).
 Source paths must be absolute paths to the files in this folder.
+Set "grade" to "none" unless the user explicitly asked for a look. Do not use warm_cinematic.
 Then stop. Do not render.
 """
 

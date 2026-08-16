@@ -163,19 +163,15 @@ Return the final EDL and a one-line total runtime check.
 
 ## Color grade (when requested)
 
-Your job is to **reason about the image**, not apply a preset. Look at a frame (via `timeline_view`), decide what's wrong, adjust one thing, look again.
+Default is **no grade**. Skin, rooms, and daylight should look like the camera, not like a LUT.
 
-Mental model is ASC CDL. Per channel: `out = (in * slope + offset) ** power`, then global saturation. `slope` → highlights, `offset` → shadows, `power` → midtones.
+Do not apply `warm_cinematic` or any teal/orange / crushed-black / desaturated look unless the user asked for a stylized grade. If they have not mentioned color, write `"grade": "none"`.
 
-**Example filter chains** (`grade.py` has `--list-presets`; use them as starting points or mix your own):
+If they ask for a *slightly* cinematic pass with no obvious grade, use `cinematic` (≈2% contrast, no hue shift). `neutral_punch` is the same idea.
 
-- **`warm_cinematic`** — retro/technical, subtle teal/orange split, desaturated. Shipped in a real launch video. Safe for talking heads.
-- **`neutral_punch`** — minimal corrective: contrast bump + gentle S-curve. No hue shifts.
-- **`none`** — straight copy. Default when the user hasn't asked.
+`grade.py --filter '<raw ffmpeg>'` is for a custom chain the user described. Never invent a creative grade.
 
-For anything else — portraiture, nature, product, music video, documentary — invent your own chain. `grade.py --filter '<raw ffmpeg>'` accepts any filter string.
-
-Hard rules: apply **per-segment during extraction** (not post-concat, which re-encodes twice). Never go aggressive without testing skin tones.
+Hard rules: apply **per-segment during extraction** (not post-concat, which re-encodes twice). Never shift hue on skin.
 
 ## Subtitles (when requested)
 
@@ -279,7 +275,7 @@ Match the source unless the user asked for something specific. Common targets: `
     {"source": "C0108", "start": 14.30, "end": 28.90,
      "beat": "SOLUTION", "quote": "...", "reason": "Only take without the false start."}
   ],
-  "grade": "warm_cinematic",
+  "grade": "none",
   "overlays": [
     {"file": "edit/animations/slot_1/render.mp4", "start_in_output": 0.0, "duration": 5.0}
   ],
