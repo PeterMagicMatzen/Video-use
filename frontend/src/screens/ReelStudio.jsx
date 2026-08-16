@@ -28,6 +28,7 @@ export default function ReelStudio({ onOpenEditor }) {
     aspect: "9:16",
     cinematic: true,
     karaoke: true,
+    punch_ins: true,
     zoom_intensity: 1.0,
     caption_style: "bold",
   });
@@ -63,6 +64,7 @@ export default function ReelStudio({ onOpenEditor }) {
         aspect: opts.aspect,
         cinematic: opts.cinematic,
         karaoke: opts.karaoke,
+        punch_ins: opts.punch_ins,
         zoom_intensity: opts.zoom_intensity,
       });
       const poll = setInterval(async () => {
@@ -276,9 +278,10 @@ export default function ReelStudio({ onOpenEditor }) {
                 </div>
                 <p className="text-zinc-500 text-sm mt-1 truncate">{project.filename}</p>
 
-                <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="mt-6 grid grid-cols-2 sm:grid-cols-5 gap-3">
                   <Stat testId="stat-cuts" label="Cuts made" value={project.cuts?.spans?.filter((s) => !s.disabled).length ?? 0} />
                   <Stat testId="stat-zooms" label="Camera moves" value={meta?.moves?.length ?? 0} />
+                  <Stat testId="stat-punches" label="Punch-ins" value={meta?.punch_count ?? 0} />
                   <Stat testId="stat-duration" label="Final length" value={formatTime(project.cuts?.kept_duration)} />
                   <Stat testId="stat-format" label="Format" value={meta ? `${meta.width}×${meta.height}` : "—"} />
                 </div>
@@ -295,6 +298,27 @@ export default function ReelStudio({ onOpenEditor }) {
                           className="font-mono text-[10px] px-2 py-1 rounded border border-zinc-800 bg-zinc-900/60 text-zinc-400"
                         >
                           {m.kind} · {m.z0}→{m.z1}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {meta?.punches?.length > 0 && (
+                  <div className="mt-5" data-testid="punch-list">
+                    <p className="font-mono text-xs uppercase tracking-wider text-zinc-400 mb-2">
+                      Punched words
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {meta.punches.map((p, i) => (
+                        <span
+                          key={`${p.t}-${i}`}
+                          className="font-heading text-[11px] font-bold uppercase px-2 py-1 rounded border border-primary/40 bg-primary/10 text-primary"
+                        >
+                          {p.word}
+                          <span className="font-mono text-[9px] text-primary/60 ml-1.5">
+                            {p.t}s
+                          </span>
                         </span>
                       ))}
                     </div>
@@ -339,6 +363,11 @@ export default function ReelStudio({ onOpenEditor }) {
                 {project.cloud?.url && (
                   <p className="mt-4 font-mono text-[10px] text-zinc-600 break-all" data-testid="cloud-url">
                     Cloudinary: {project.cloud.url}
+                  </p>
+                )}
+                {project.cloud?.error && (
+                  <p className="mt-4 font-mono text-[10px] text-red-400/80 break-all" data-testid="cloud-error">
+                    Cloudinary upload skipped: {project.cloud.error}
                   </p>
                 )}
 
@@ -417,6 +446,17 @@ function Options({ opts, setOpts }) {
             checked={opts.cinematic}
             onChange={(v) => set({ cinematic: v })}
           />
+          <div className="mt-2">
+            <Toggle
+              testId="punch-ins-toggle"
+              label="Keyword punch-ins"
+              checked={opts.punch_ins}
+              onChange={(v) => set({ punch_ins: v })}
+            />
+            <p className="text-[10px] text-zinc-600 mt-1">
+              Hard zoom snap on your most emphasised words.
+            </p>
+          </div>
           <div className="mt-3">
             <div className="flex justify-between mb-1.5">
               <span className="text-[10px] text-zinc-500">Intensity</span>

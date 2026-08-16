@@ -18,6 +18,7 @@ export default function LeftRail({
     aspect: project.reel_settings?.aspect ?? "9:16",
     cinematic: project.reel_settings?.cinematic ?? true,
     karaoke: project.reel_settings?.karaoke ?? true,
+    punch_ins: project.reel_settings?.punch_ins ?? true,
     zoom_intensity: project.reel_settings?.zoom_intensity ?? 1.0,
   });
   const [exportState, setExportState] = useState(project.export || { status: "idle" });
@@ -47,6 +48,7 @@ export default function LeftRail({
         aspect: reel.aspect,
         cinematic: reel.cinematic,
         karaoke: reel.karaoke,
+        punch_ins: reel.punch_ins,
         zoom_intensity: reel.zoom_intensity,
       });
       setExportState({ status: "processing", progress: 0 });
@@ -176,6 +178,13 @@ export default function LeftRail({
           hint={`${cuts?.moves?.length || 0} camera moves`}
           checked={reel.cinematic}
           onChange={(v) => setReel((r) => ({ ...r, cinematic: v }))}
+        />
+        <ToggleRow
+          testId="editor-punch-toggle"
+          label="Keyword punch-ins"
+          hint={`${(cuts?.moves || []).reduce((n, m) => n + (m.snaps?.length || 0), 0)} snaps on emphasis`}
+          checked={reel.punch_ins}
+          onChange={(v) => setReel((r) => ({ ...r, punch_ins: v }))}
         />
         <div>
           <div className="flex justify-between mb-1.5">

@@ -130,14 +130,23 @@ def extract_segment(source: Path, start: float, end: float, out_path: Path, info
         parts.append(f"crop={cw}:{ch}:{cx}:{cy}")
     parts.append(f"fps={FPS}")
 
-    zooming = move and (move["z0"] > 1.001 or move["z1"] > 1.001)
+    zooming = move and (move["z0"] > 1.001 or move["z1"] > 1.001 or move.get("snaps"))
     if zooming:
         pw, ph = _even(W * PRESCALE), _even(H * PRESCALE)
         parts.append(f"scale={pw}:{ph}:flags=bicubic")
         frames = max(1, int(duration * FPS))
         z0, z1 = move["z0"], move["z1"]
         dz = z1 - z0
-        zexpr = f"max(1,{z0:.4f}+({dz:.4f})*on/{frames})"
+        terms = [f"{z0:.4f}+({dz:.4f})*on/{frames}"]
+        for snap in move.get("snaps") or []:
+            f0 = int(snap["t"] * FPS)
+            f1 = f0 + max(2, int(snap.get("decay", 0.45) * FPS))
+            if f0 >= frames:
+                continue
+            terms.append(
+                f"if(between(on,{f0},{f1}),{snap['amp']:.4f}*(1-(on-{f0})/{f1 - f0}),0)"
+            )
+        zexpr = f"min({PRESCALE - 0.03:.3f},max(1,{'+'.join(terms)}))"
         parts.append(
             f"zoompan=z='{zexpr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
             f":d=1:s={W}x{H}:fps={FPS}"
@@ -313,7 +322,8 @@ def loudnorm(input_path: Path, out_path: Path) -> None:
 def render_export(source: Path, words: list, ranges: list, style_key: str, burn: bool,
                   work_dir: Path, out_path: Path, aspect: str = "original",
                   cinematic: bool = True, karaoke: bool = True,
-                  zoom_intensity: float = 1.0, progress_cb=None) -> dict:
+                  zoom_intensity: float = 1.0, punch_ins: bool = True,
+                  progress_cb=None) -> dict:
     work_dir.mkdir(parents=True, exist_ok=True)
     info = probe(source)
     style = CAPTION_STYLES.get(style_key, CAPTION_STYLES["bold"])
@@ -329,7 +339,7 @@ def render_export(source: Path, words: list, ranges: list, style_key: str, burn:
     if progress_cb:
         progress_cb(6)
 
-    moves = zooms.plan(words, ranges, zoom_intensity) if cinematic else []
+    moves = zooms.plan(words, ranges, zoom_intensity, punch_ins) if cinematic else []
 
     seg_paths = []
     total = max(1, len(ranges))
@@ -364,11 +374,19 @@ def render_export(source: Path, words: list, ranges: list, style_key: str, burn:
     for p in seg_paths:
         p.unlink(missing_ok=True)
 
+    punches = [
+        {"word": s["word"], "t": round(m["start"] + s["t"], 2), "amp": s["amp"]}
+        for m in moves for s in (m.get("snaps") or [])
+    ]
+    punches.sort(key=lambda p: p["t"])
+
     return {
         "width": target[0],
         "height": target[1],
         "aspect": aspect,
         "moves": moves,
+        "punches": punches[:16],
+        "punch_count": len(punches),
         "center_x": round(center_x, 3),
         "caption_events": caption_count,
         "karaoke": bool(burn and karaoke),

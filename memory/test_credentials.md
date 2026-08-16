@@ -6,9 +6,10 @@ No user authentication — the app is a single-video / no-login flow.
 - `ELEVENLABS_API_KEY` — ElevenLabs Scribe STT (free tier: STT works, TTS blocked)
 - `CLOUDINARY_API_KEY` = 319487612252352
 - `CLOUDINARY_API_SECRET` = d8g34miTcQylPaF9AOqAtx072yY
-- `CLOUDINARY_CLOUD_NAME` = **EMPTY — user still needs to supply it.**
-  Until it is set, `GET /api/cloudinary/status` returns `enabled:false` and the
-  render pipeline uses the local FFmpeg 9:16 reframe (OpenCV face centering).
+- `CLOUDINARY_CLOUD_NAME` = `clipcut` → **REJECTED by Cloudinary: "Invalid cloud_name clipcut".**
+  Needs the exact cloud name from Cloudinary Dashboard → Product Environment ("Cloud name",
+  often an auto-generated string like `dxk3f9abc`). Until it is correct, exports still succeed and
+  `project.cloud.error` carries the message (surfaced in the UI as `cloud-error`).
 
 ## Test media
 - `/app/memory/testvid.mp4` — 14.7s espeak speech clip with a 2.5s silence gap (640x360)

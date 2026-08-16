@@ -41,6 +41,7 @@ DEFAULT_REEL = {
     "cinematic": True,
     "karaoke": True,
     "zoom_intensity": 1.0,
+    "punch_ins": True,
     "burn_captions": True,
 }
 
@@ -77,7 +78,8 @@ def compute_cut_state(doc: dict) -> dict:
         "kept_duration": round(kept, 2),
         "removed_duration": round(max(0, duration - kept), 2),
         "settings": settings,
-        "moves": zooms.plan(words, ranges, reel.get("zoom_intensity", 1.0)) if reel.get("cinematic") else [],
+        "moves": zooms.plan(words, ranges, reel.get("zoom_intensity", 1.0),
+                            reel.get("punch_ins", True)) if reel.get("cinematic") else [],
     }
 
 
@@ -314,6 +316,7 @@ class ReelSettings(BaseModel):
     cinematic: bool = True
     karaoke: bool = True
     zoom_intensity: float = 1.0
+    punch_ins: bool = True
     burn_captions: bool = True
 
 
@@ -325,6 +328,7 @@ def _clean_reel(body: ReelSettings) -> dict:
         "cinematic": body.cinematic,
         "karaoke": body.karaoke,
         "zoom_intensity": max(0.2, min(1.6, body.zoom_intensity)),
+        "punch_ins": body.punch_ins,
         "burn_captions": body.burn_captions,
     }
 
@@ -370,6 +374,7 @@ class ExportBody(BaseModel):
     cinematic: bool = True
     karaoke: bool = True
     zoom_intensity: float = 1.0
+    punch_ins: bool = True
 
 
 @api.post("/projects/{pid}/export")
@@ -383,7 +388,8 @@ def start_export(pid: str, body: ExportBody):
         raise HTTPException(400, "unknown style")
     reel = _clean_reel(ReelSettings(
         aspect=body.aspect, cinematic=body.cinematic, karaoke=body.karaoke,
-        zoom_intensity=body.zoom_intensity, burn_captions=body.burn_captions,
+        zoom_intensity=body.zoom_intensity, punch_ins=body.punch_ins,
+        burn_captions=body.burn_captions,
     ))
     projects.update_one({"id": pid}, {"$set": {
         "caption_style": body.caption_style,
@@ -417,6 +423,7 @@ def _run_export(pid: str, style_key: str, reel: dict):
             cinematic=reel["cinematic"],
             karaoke=reel["karaoke"],
             zoom_intensity=reel["zoom_intensity"],
+            punch_ins=reel.get("punch_ins", True),
             progress_cb=cb,
         )
         cloud = {}

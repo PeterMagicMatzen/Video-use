@@ -62,8 +62,20 @@ User choices:
   INACTIVE until CLOUDINARY_CLOUD_NAME is set; local FFmpeg path handles everything meanwhile
 - Tested: testing agent iteration_2 — backend 10/10, frontend 100% of testable flows, 0 issues
 
+### 2026-06 (session 3 — keyword punch-ins + Cloudinary creds)
+- zooms.py: emphasis scoring per word (pace-relative elongation vs the speaker's own median
+  sec/char, terminal !/?, held-then-beat gaps, hook lexicon, digits, long words). Words scoring
+  ≥0.85 get a hard zoom SNAP: instant +7–14% zoom, linear decay over 0.38s, max 5 per segment,
+  min 1.4s apart, capped so total zoom stays under the 1.3x prescale (stays sharp)
+- render_engine: composite zoompan expression = linear base move + `if(between(on,f0,f1),...)`
+  snap terms. Verified objectively: face height 805px → 885px (+10%) at the punch, decaying back
+- meta now returns `punches` (word + timestamp) and `punch_count`; UI shows a Punch-ins stat and
+  "Punched words" chips; `punch_ins` toggle in both the studio recipe and the editor rail
+- CLOUDINARY_CLOUD_NAME set to `clipcut` but Cloudinary rejects it ("Invalid cloud_name") — the
+  upload is wrapped so exports still succeed and the error surfaces in the UI (`cloud-error`)
+
 ## Backlog
-- P0: user to supply CLOUDINARY_CLOUD_NAME → flip on cloud reframe + CDN preview delivery
+- P0: correct CLOUDINARY_CLOUD_NAME from the user → cloud reframe + CDN preview delivery
 - P1: editable transcript text before export (fix Scribe mistranscriptions)
 - P1: draggable/resizable caption box in the preview that maps 1:1 to the export
 - P2: beat-synced b-roll / punch-in on keyword hits
