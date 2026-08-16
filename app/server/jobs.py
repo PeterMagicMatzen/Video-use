@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -141,9 +142,21 @@ def start_auto_edit(folder: Path) -> dict:
             s["chat_after_approve"] = False
             s["edl_approved_at"] = _now()
             s["last_error"] = None
-            s["job"] = _idle_job()
+            s["job"] = {
+                "kind": "render",
+                "pid": os.getpid(),
+                "started_at": _now(),
+                "output": str(folder / "edit" / "final.mp4"),
+                "log": str(folder / "edit" / "render.log"),
+            }
             save_session(folder, s)
-            start_render(folder, preview=True)
+            _run_render(folder, preview=True)
+            _run_render(folder, preview=False)
+            _publish_beside_source(folder)
+            s = load_session(folder)
+            s["last_error"] = None
+            s["job"] = _idle_job(log=str(folder / "edit" / "render.log"))
+            save_session(folder, s)
         except Exception as exc:
             s = load_session(folder)
             s["last_error"] = str(exc)
@@ -156,6 +169,51 @@ def start_auto_edit(folder: Path) -> dict:
     session["job"]["pid"] = os.getpid()
     save_session(folder, session)
     return {"accepted": True}
+
+
+def _publish_beside_source(folder: Path) -> Path | None:
+    src = folder / "edit" / "final.mp4"
+    if not src.is_file():
+        src = folder / "edit" / "preview.mp4"
+    if not src.is_file():
+        return None
+    videos = [
+        p for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}
+        and not p.name.endswith("-EDIT.mp4")
+        and p.name not in {"preview.mp4", "final.mp4"}
+    ]
+    if not videos:
+        dest = folder / "final-EDIT.mp4"
+    else:
+        dest = folder / f"{videos[0].stem}-EDIT.mp4"
+    shutil.copy2(src, dest)
+    return dest
+
+
+def _run_render(folder: Path, *, preview: bool) -> None:
+    edl, _, edit_dir = _load_edl(folder)
+    result = validate_edl(edl, edit_dir=edit_dir)
+    if not result.ok:
+        raise RuntimeError("invalid EDL: " + "\n".join(result.errors))
+    out_name = "preview.mp4" if preview else "final.mp4"
+    render_name = "preview.rendering.mp4" if preview else out_name
+    out = edit_dir / out_name
+    staging = edit_dir / render_name
+    log = edit_dir / "render.log"
+    args = ["edit/edl.json", "-o", f"edit/{render_name}"]
+    if preview:
+        args.append("--preview")
+    if should_build_subtitles(edl, edit_dir):
+        args.append("--build-subtitles")
+    batch = proc_mod.run_helper("render.py", args, cwd=folder)
+    prev = log.read_text(encoding="utf-8") if log.is_file() else ""
+    log.write_text(prev + (batch.stderr or "") + (batch.stdout or ""), encoding="utf-8")
+    if batch.returncode != 0:
+        err = batch.stderr or batch.stdout or "render failed"
+        raise RuntimeError(_last_n_lines(err, 40))
+    if preview:
+        os.replace(staging, out)
 
 
 def start_render(folder: Path, *, preview: bool) -> dict:
@@ -188,40 +246,15 @@ def start_render(folder: Path, *, preview: bool) -> dict:
     def work():
         s = load_session(folder)
         try:
-            args = ["edit/edl.json", "-o", f"edit/{render_name}"]
-            if preview:
-                args.append("--preview")
-            if should_build_subtitles(edl, edit_dir):
-                args.append("--build-subtitles")
-            batch = proc_mod.run_helper("render.py", args, cwd=folder)
-            log.write_text((batch.stderr or "") + (batch.stdout or ""), encoding="utf-8")
-            if batch.returncode != 0:
-                err = batch.stderr or batch.stdout or "render failed"
-                raise subprocess.CalledProcessError(
-                    batch.returncode,
-                    batch.args,
-                    output=batch.stdout,
-                    stderr=err,
-                )
-            if preview:
-                os.replace(staging, out)
+            _run_render(folder, preview=preview)
+            if not preview:
+                _publish_beside_source(folder)
             s = load_session(folder)
             s["last_error"] = None
-        except subprocess.CalledProcessError as exc:
-            s = load_session(folder)
-            err = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", "replace")
-            s["last_error"] = _last_n_lines(err or str(exc), 40)
-            try:
-                existing = log.read_text(encoding="utf-8") if log.is_file() else ""
-            except OSError:
-                existing = ""
-            if err and err not in existing:
-                log.write_text(existing + err, encoding="utf-8")
         except Exception as exc:
             s = load_session(folder)
             s["last_error"] = str(exc)
         finally:
-            # Never unlink preview.mp4 — a later final/preview failure leaves it.
             s["job"] = _idle_job(log=str(log))
             save_session(folder, s)
 

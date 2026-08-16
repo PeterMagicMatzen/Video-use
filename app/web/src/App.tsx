@@ -10,6 +10,7 @@ import {
   postFolder,
   postFolderBrowse,
   postOpenEdit,
+  postOpenOutput,
   postReject,
   postRenderFinal,
   postTranscribe,
@@ -225,13 +226,30 @@ export default function App() {
           ))}
         </ul>
         <button type="button" disabled={busy || !payload} onClick={() => void run(() => postOpenEdit())}>
-          Open edit
+          Open edit folder
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy || !(payload?.has_preview || payload?.has_final)}
+          onClick={() => void run(() => postOpenOutput())}
+        >
+          Open finished video
         </button>
       </aside>
 
       <main className="col center">
         <h2>State: {center}</h2>
-        {jobKind !== "idle" ? <p className="job">job: {jobKind}</p> : null}
+        {jobKind !== "idle" ? (
+          <p className="job">Working: {jobKind} — wait for the finished video, not just edl.json</p>
+        ) : null}
+        {payload?.has_final || payload?.has_preview ? (
+          <p className="hint">
+            Finished cut is ready
+            {payload.has_final ? " (final.mp4)" : " (preview.mp4)"}. Use{" "}
+            <strong>Open finished video</strong> if the player looks like the raw take.
+          </p>
+        ) : null}
         {errorText(payload?.error, actionError) ? (
           <p className="error">{errorText(payload?.error, actionError)}</p>
         ) : null}

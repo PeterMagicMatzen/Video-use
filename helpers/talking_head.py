@@ -145,6 +145,6 @@ def build_talking_head_edl(*, folder: Path, edit_dir: Path) -> dict:
         "ranges": ranges,
         "grade": "cinematic",
         "overlays": overlays,
-        "subtitles": "edit/master.srt",
+        "subtitles": "master.srt",
         "total_duration_s": total,
     }

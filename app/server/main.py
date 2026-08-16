@@ -194,6 +194,23 @@ def get_state() -> dict:
     return project_payload()
 
 
+@app.post("/api/open-output")
+def post_open_output() -> dict:
+    folder = _require_open_folder()
+    for name in ("final.mp4", "preview.mp4"):
+        path = folder / "edit" / name
+        if path.is_file():
+            if sys.platform == "win32":
+                os.startfile(str(path))  # noqa: S606
+            return {"ok": True, "path": str(path)}
+    published = list(folder.glob("*-EDIT.mp4"))
+    if published:
+        if sys.platform == "win32":
+            os.startfile(str(published[0]))  # noqa: S606
+        return {"ok": True, "path": str(published[0])}
+    raise HTTPException(status_code=404, detail="no finished video yet")
+
+
 @app.post("/api/open-edit")
 def post_open_edit() -> dict:
     if CURRENT_FOLDER is None:

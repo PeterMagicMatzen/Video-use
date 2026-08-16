@@ -42,6 +42,12 @@ export async function postFileBrowse() {
   return r.json();
 }
 
+export async function postOpenOutput() {
+  const r = await fetch(`${API}/api/open-output`, { method: "POST" });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function postOpenEdit() {
   const r = await fetch(`${API}/api/open-edit`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
