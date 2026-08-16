@@ -6,13 +6,13 @@ body,
 }
 
 body {
-  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  font-family: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
-  line-height: 1.4;
-  color: #111;
-  background: #fff;
+  line-height: 1.45;
+  background: #0c0d10;
+  color: #ece8df;
 }
 
-ul {
-  padding-left: 1.2rem;
+* {
+  box-sizing: border-box;
 }

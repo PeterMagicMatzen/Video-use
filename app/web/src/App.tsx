@@ -18,24 +18,29 @@ import {
   streamChat,
 } from "./api";
 import { canApprove, canAutoEdit, canChat, canRenderFinal, canTranscribe } from "./buttons";
+import { headlineFor, stepIndex } from "./status";
 import type { Doctor, ProjectPayload } from "./types";
 import "./App.css";
 
 type ChatLine = { role: "user" | "assistant"; text: string };
+type WatchMode = "cut" | "raw";
 
 function fmtDur(s: number | null): string {
   if (s == null || Number.isNaN(s)) return "—";
-  return `${s.toFixed(1)}s`;
-}
-
-function fmtFps(fps: number | null): string {
-  if (fps == null || Number.isNaN(fps)) return "—";
-  return `${Number.isInteger(fps) ? String(fps) : fps.toFixed(2)} fps`;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.round(s - m * 60)}s`;
 }
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+function errorText(sessionError: string | null | undefined, local: string | null): string | null {
+  return sessionError || local;
+}
+
+const STEPS = ["Add clip", "Transcribe", "Edit", "Watch"];
 
 export default function App() {
   const [payload, setPayload] = useState<ProjectPayload | null>(null);
@@ -48,6 +53,8 @@ export default function App() {
   const [chatLog, setChatLog] = useState<ChatLine[]>([]);
   const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [chatRetry, setChatRetry] = useState(false);
+  const [watch, setWatch] = useState<WatchMode>("cut");
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const applyPayload = useCallback((next: ProjectPayload) => {
     setPayload(next);
@@ -87,11 +94,21 @@ export default function App() {
   const sources = payload?.sources ?? [];
   const shownRecents = payload?.recents ?? recents;
   const first = sources[0];
-  const videoSrc = payload?.has_preview
-    ? `${API}/api/media/preview${payload.preview_mtime != null ? `?t=${payload.preview_mtime}` : ""}`
-    : first
-      ? `${API}/api/media/source/${encodeURIComponent(first.name)}`
+  const hasCut = Boolean(payload?.has_preview || payload?.has_final);
+  const working = busy || jobKind !== "idle";
+  const copy = headlineFor(center, hasCut);
+  const step = stepIndex(center, hasCut);
+  const chatOn = Boolean(payload?.chat_enabled) && canChat(center, doctorOk);
+
+  const cutSrc = payload?.has_final
+    ? `${API}/api/media/final`
+    : payload?.has_preview
+      ? `${API}/api/media/preview${payload.preview_mtime != null ? `?t=${payload.preview_mtime}` : ""}`
       : null;
+  const rawSrc = first ? `${API}/api/media/source/${encodeURIComponent(first.name)}` : null;
+  const useCut = watch === "cut" && cutSrc;
+  const videoSrc = useCut ? cutSrc : rawSrc;
+  const videoLabel = useCut ? "Finished cut" : rawSrc ? "Raw take" : "No clip";
 
   async function run(fn: () => Promise<void>) {
     setActionError(null);
@@ -113,8 +130,6 @@ export default function App() {
       applyPayload((await postFolder(trimmed)) as ProjectPayload);
     });
   }
-
-  const chatOn = canChat(center, doctorOk);
 
   function makeAppender() {
     let started = false;
@@ -151,33 +166,42 @@ export default function App() {
     }
   }
 
+  const login = checks.find((c) => c.name === "claude_login");
+
   return (
-    <div className="app">
-      <aside className="col left">
-        <h1>video-use</h1>
-        <ul className="doctor">
+    <div className="shell">
+      <header className="top">
+        <div className="brand">
+          <span className="mark" aria-hidden />
+          <div>
+            <strong>video-use</strong>
+            <span>Talking-head editor</span>
+          </div>
+        </div>
+        <ol className="steps" aria-label="Edit steps">
+          {STEPS.map((label, i) => (
+            <li key={label} className={i === step ? "on" : i < step ? "done" : ""}>
+              <em>{i + 1}</em>
+              {label}
+            </li>
+          ))}
+        </ol>
+        <ul className="health" aria-label="System checks">
           {checks.map((c) => (
-            <li key={c.name} className={c.ok ? "ok" : "bad"}>
-              {c.name}
+            <li key={c.name} className={c.ok ? "ok" : c.required ? "bad" : "warn"} title={c.detail}>
+              {c.name.replace("_", " ")}
             </li>
           ))}
         </ul>
-        <div className="folder-row">
-          <input
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void openPath(path);
-            }}
-            placeholder="Folder or C:\path\to\clip.mp4"
-            aria-label="Folder or video path"
-          />
-          <button type="button" disabled={busy} onClick={() => void openPath(path)}>
-            Open
-          </button>
+      </header>
+
+      <div className="body">
+        <aside className="rail">
+          <p className="eyebrow">Clip</p>
           <button
             type="button"
-            disabled={busy}
+            className="drop"
+            disabled={working}
             onClick={() =>
               void run(async () => {
                 const result = await postFileBrowse();
@@ -186,11 +210,27 @@ export default function App() {
               })
             }
           >
-            Add video
+            <strong>Add talking-head video</strong>
+            <span>Opens a file picker on this PC. The clip never uploads.</span>
           </button>
+          <div className="path-row">
+            <input
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void openPath(path);
+              }}
+              placeholder="Or paste a folder / .mp4 path"
+              aria-label="Folder or video path"
+            />
+            <button type="button" disabled={working} onClick={() => void openPath(path)}>
+              Open
+            </button>
+          </div>
           <button
             type="button"
-            disabled={busy}
+            className="ghost"
+            disabled={working}
             onClick={() =>
               void run(async () => {
                 const result = await postFolderBrowse();
@@ -201,158 +241,201 @@ export default function App() {
           >
             Browse folder
           </button>
-        </div>
-        <p className="hint">
-          Nothing uploads. The file stays on disk. Use <strong>Add video</strong> and pick the
-          .mp4 — a file dialog opens on this PC (it may sit behind the browser). Then click
-          Transcribe.
-        </p>
-        <h2>Recents</h2>
-        <ul>
-          {shownRecents.map((p) => (
-            <li key={p}>
-              <button type="button" className="link" disabled={busy} onClick={() => void openPath(p)}>
-                {p}
-              </button>
-            </li>
-          ))}
-        </ul>
-        <h2>Sources</h2>
-        <ul>
-          {sources.map((s) => (
-            <li key={s.name}>
-              {s.name} {fmtDur(s.duration_s)} {s.width ?? "?"}×{s.height ?? "?"} {fmtFps(s.fps)}
-            </li>
-          ))}
-        </ul>
-        <button type="button" disabled={busy || !payload} onClick={() => void run(() => postOpenEdit())}>
-          Open edit folder
-        </button>
-        <button
-          type="button"
-          className="primary"
-          disabled={busy || !(payload?.has_preview || payload?.has_final)}
-          onClick={() => void run(() => postOpenOutput())}
-        >
-          Open finished video
-        </button>
-      </aside>
 
-      <main className="col center">
-        <h2>State: {center}</h2>
-        {jobKind !== "idle" ? (
-          <p className="job">Working: {jobKind} — wait for the finished video, not just edl.json</p>
-        ) : null}
-        {payload?.has_final || payload?.has_preview ? (
-          <p className="hint">
-            Finished cut is ready
-            {payload.has_final ? " (final.mp4)" : " (preview.mp4)"}. Use{" "}
-            <strong>Open finished video</strong> if the player looks like the raw take.
-          </p>
-        ) : null}
-        {errorText(payload?.error, actionError) ? (
-          <p className="error">{errorText(payload?.error, actionError)}</p>
-        ) : null}
-        {payload?.packed_markdown ? <pre>{payload.packed_markdown}</pre> : null}
-        <h3>Ranges</h3>
-        <ul>
-          {(payload?.edl?.ranges ?? []).map((r, i) => (
-            <li key={`${r.source}-${r.start}-${r.end}-${i}`}>
-              {r.beat ?? "range"} {r.start}–{r.end} {r.source}
-              {r.quote ? ` — ${r.quote}` : ""}
-            </li>
-          ))}
-        </ul>
-        {videoSrc ? <video key={videoSrc} src={videoSrc} controls /> : null}
-        <div className="actions">
-          <button
-            type="button"
-            className="primary"
-            disabled={busy || !canAutoEdit(center, Boolean(payload?.packed_markdown))}
-            onClick={() => void run(() => postAutoEdit())}
-          >
-            Make professional edit
-          </button>
-          <button
-            type="button"
-            disabled={busy || !canTranscribe(center, doctorOk)}
-            onClick={() => void run(() => postTranscribe())}
-          >
-            Transcribe
-          </button>
-          <button
-            type="button"
-            disabled={busy || !canApprove(center, doctorOk)}
-            onClick={() => void run(() => postApprove())}
-          >
-            Approve & preview
-          </button>
-          <button
-            type="button"
-            disabled={busy || !canRenderFinal(center)}
-            onClick={() => void run(() => postRenderFinal())}
-          >
-            Render final
-          </button>
-          <button
-            type="button"
-            disabled={busy || !payload}
-            onClick={() => {
-              const note = window.prompt("Reject note");
-              if (note == null || !note.trim()) return;
-              void run(() => postReject(note.trim()));
-            }}
-          >
-            Reject
-          </button>
-        </div>
-      </main>
+          {sources.length > 0 ? (
+            <ul className="clips">
+              {sources.map((s) => (
+                <li key={s.name}>
+                  <b>{s.name}</b>
+                  <span>
+                    {fmtDur(s.duration_s)} · {s.width}×{s.height}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No clip open yet.</p>
+          )}
 
-      <aside className="col right">
-        <h2>Chat</h2>
-        <div className="chat-log">
-          {chatLog.map((line, i) => (
-            <p key={`${line.role}-${i}`}>
-              <strong>{line.role}:</strong> {line.text}
+          {shownRecents.length > 0 ? (
+            <>
+              <p className="eyebrow">Recent</p>
+              <ul className="recents">
+                {shownRecents.map((p) => (
+                  <li key={p}>
+                    <button type="button" disabled={working} onClick={() => void openPath(p)}>
+                      {p}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </aside>
+
+        <main className="stage">
+          <div className="hero-copy">
+            <p className="kicker">{copy.kicker}</p>
+            <h1>{copy.title}</h1>
+            <p className="lede">{copy.detail}</p>
+          </div>
+
+          {working ? (
+            <p className="pulse" role="status">
+              {jobKind === "transcribe"
+                ? "Transcribing speech…"
+                : jobKind === "render"
+                  ? "Rendering the movie — this is the real cut, not just the plan file."
+                  : jobKind === "claude"
+                    ? "Claude is writing the plan…"
+                    : "Working…"}
             </p>
-          ))}
-        </div>
-        {chatNotice ? <p className="error">{chatNotice}</p> : null}
-        <textarea
-          value={draft}
-          disabled={!chatOn || busy}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={chatOn ? "Strategy notes…" : "Chat disabled until packed"}
-        />
-        <div className="actions">
-          <button
-            type="button"
-            disabled={busy || !chatOn || !draft.trim()}
-            onClick={() => {
-              const message = draft.trim();
-              if (!message) return;
-              setDraft("");
-              setChatLog((log) => [...log, { role: "user", text: message }]);
-              void runChat((onText) => streamChat(message, onText));
-            }}
-          >
-            Send
+          ) : null}
+
+          {errorText(payload?.error, actionError) ? (
+            <p className="banner error">{errorText(payload?.error, actionError)}</p>
+          ) : null}
+
+          <div className="player-wrap">
+            <div className="player-meta">
+              <span className={useCut ? "tag cut" : "tag raw"}>{videoLabel}</span>
+              {cutSrc && rawSrc ? (
+                <div className="toggle" role="group" aria-label="Which video">
+                  <button type="button" className={watch === "cut" ? "on" : ""} onClick={() => setWatch("cut")}>
+                    Finished
+                  </button>
+                  <button type="button" className={watch === "raw" ? "on" : ""} onClick={() => setWatch("raw")}>
+                    Raw
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            {videoSrc ? (
+              <video key={videoSrc} src={videoSrc} controls playsInline />
+            ) : (
+              <div className="empty-player">Add a clip to see it here.</div>
+            )}
+          </div>
+
+          <div className="cta">
+            {canTranscribe(center, doctorOk) ? (
+              <button type="button" className="primary" disabled={working} onClick={() => void run(() => postTranscribe())}>
+                Transcribe take
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="primary"
+              disabled={working || !canAutoEdit(center, Boolean(payload?.packed_markdown))}
+              onClick={() => void run(() => postAutoEdit())}
+            >
+              Make professional edit
+            </button>
+            <button
+              type="button"
+              disabled={working || !hasCut}
+              onClick={() => void run(() => postOpenOutput())}
+            >
+              Open finished file
+            </button>
+          </div>
+        </main>
+
+        <aside className="side">
+          <p className="eyebrow">Timeline</p>
+          {(payload?.edl?.ranges ?? []).length === 0 ? (
+            <p className="muted">Cuts show up here after you make an edit.</p>
+          ) : (
+            <ol className="timeline">
+              {(payload?.edl?.ranges ?? []).map((r, i) => (
+                <li key={`${r.source}-${r.start}-${r.end}-${i}`}>
+                  <span>{r.beat ?? `Cut ${i + 1}`}</span>
+                  <b>{r.quote || `${r.start.toFixed(1)}–${r.end.toFixed(1)}`}</b>
+                </li>
+              ))}
+            </ol>
+          )}
+
+          <p className="eyebrow">Director notes</p>
+          <div className="chat-log">
+            {chatLog.length === 0 ? (
+              <p className="muted">
+                Optional. Ask for a custom cut after you sign in with{" "}
+                <code>claude auth login</code>.
+                {login && !login.ok ? " Claude is signed out right now." : ""}
+              </p>
+            ) : (
+              chatLog.map((line, i) => (
+                <p key={`${line.role}-${i}`} className={line.role}>
+                  <strong>{line.role === "user" ? "You" : "Editor"}</strong>
+                  {line.text}
+                </p>
+              ))
+            )}
+          </div>
+          {chatNotice ? <p className="banner error">{chatNotice}</p> : null}
+          <textarea
+            value={draft}
+            disabled={!chatOn || working}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={chatOn ? "e.g. Tighter hook, drop the last line" : "Transcribe first. Claude login needed for chat."}
+          />
+          <div className="row">
+            <button
+              type="button"
+              disabled={working || !chatOn || !draft.trim()}
+              onClick={() => {
+                const message = draft.trim();
+                if (!message) return;
+                setDraft("");
+                setChatLog((log) => [...log, { role: "user", text: message }]);
+                void runChat((onText) => streamChat(message, onText));
+              }}
+            >
+              Send
+            </button>
+            <button type="button" disabled={working || !chatOn || !chatRetry} onClick={() => void runChat((onText) => retryChat(onText))}>
+              Retry
+            </button>
+          </div>
+
+          <button type="button" className="ghost more" onClick={() => setMoreOpen((v) => !v)}>
+            {moreOpen ? "Hide advanced" : "Advanced"}
           </button>
-          <button
-            type="button"
-            disabled={busy || !chatOn || !chatRetry}
-            onClick={() => {
-              void runChat((onText) => retryChat(onText));
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      </aside>
+          {moreOpen ? (
+            <div className="advanced">
+              <button type="button" disabled={working || !payload} onClick={() => void run(() => postOpenEdit())}>
+                Open edit folder
+              </button>
+              <button
+                type="button"
+                disabled={working || !canApprove(center, doctorOk)}
+                onClick={() => void run(() => postApprove())}
+              >
+                Approve Claude plan
+              </button>
+              <button
+                type="button"
+                disabled={working || !canRenderFinal(center)}
+                onClick={() => void run(() => postRenderFinal())}
+              >
+                Re-render final
+              </button>
+              <button
+                type="button"
+                disabled={working || !payload}
+                onClick={() => {
+                  const note = window.prompt("Note for the next chat turn");
+                  if (note == null || !note.trim()) return;
+                  void run(() => postReject(note.trim()));
+                }}
+              >
+                Send reject note
+              </button>
+            </div>
+          ) : null}
+        </aside>
+      </div>
     </div>
   );
-}
-
-function errorText(sessionError: string | null | undefined, local: string | null): string | null {
-  return sessionError || local;
 }
