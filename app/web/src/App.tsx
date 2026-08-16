@@ -5,6 +5,7 @@ import {
   getRecents,
   getState,
   postApprove,
+  postAutoEdit,
   postFileBrowse,
   postFolder,
   postFolderBrowse,
@@ -15,7 +16,7 @@ import {
   retryChat,
   streamChat,
 } from "./api";
-import { canApprove, canChat, canRenderFinal, canTranscribe } from "./buttons";
+import { canApprove, canAutoEdit, canChat, canRenderFinal, canTranscribe } from "./buttons";
 import type { Doctor, ProjectPayload } from "./types";
 import "./App.css";
 
@@ -246,6 +247,14 @@ export default function App() {
         </ul>
         {videoSrc ? <video key={videoSrc} src={videoSrc} controls /> : null}
         <div className="actions">
+          <button
+            type="button"
+            className="primary"
+            disabled={busy || !canAutoEdit(center, Boolean(payload?.packed_markdown))}
+            onClick={() => void run(() => postAutoEdit())}
+          >
+            Make professional edit
+          </button>
           <button
             type="button"
             disabled={busy || !canTranscribe(center, doctorOk)}

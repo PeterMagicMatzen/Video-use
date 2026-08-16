@@ -53,6 +53,11 @@ export async function postTranscribe() {
   if (!r.ok) throw new Error(await r.text());
 }
 
+export async function postAutoEdit() {
+  const r = await fetch(`${API}/api/auto-edit`, { method: "POST" });
+  if (!r.ok) throw new Error(await r.text());
+}
+
 export async function postApprove() {
   const r = await fetch(`${API}/api/approve`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());

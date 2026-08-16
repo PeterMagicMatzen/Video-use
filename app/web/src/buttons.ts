@@ -10,3 +10,7 @@ export function canApprove(state: string, doctorOk: boolean) {
 export function canRenderFinal(state: string) {
   return state === "preview-ready";
 }
+
+export function canAutoEdit(state: string, packed: boolean) {
+  return packed && !["empty", "inventory", "transcribing", "rendering"].includes(state);
+}

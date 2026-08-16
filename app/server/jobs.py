@@ -113,6 +113,51 @@ def start_transcribe(folder: Path) -> dict:
     return {"accepted": True}
 
 
+def start_auto_edit(folder: Path) -> dict:
+    """Tight cuts + captions + graphics. Does not call Claude."""
+    session = load_session(folder)
+    _raise_if_busy(folder, session)
+    session["last_error"] = None
+    session["job"] = {
+        "kind": "render",
+        "pid": None,
+        "started_at": _now(),
+        "output": None,
+        "log": str(folder / "edit" / "render.log"),
+    }
+    save_session(folder, session)
+
+    def work():
+        s = load_session(folder)
+        try:
+            if str(HELPERS) not in sys.path:
+                sys.path.insert(0, str(HELPERS))
+            from talking_head import build_talking_head_edl
+            edl = build_talking_head_edl(folder=folder, edit_dir=folder / "edit")
+            edl_path = folder / "edit" / "edl.json"
+            edl_path.write_text(json.dumps(edl, indent=2), encoding="utf-8")
+            s = load_session(folder)
+            s["edl_mtime_at_approve"] = edl_path.stat().st_mtime
+            s["chat_after_approve"] = False
+            s["edl_approved_at"] = _now()
+            s["last_error"] = None
+            s["job"] = _idle_job()
+            save_session(folder, s)
+            start_render(folder, preview=True)
+        except Exception as exc:
+            s = load_session(folder)
+            s["last_error"] = str(exc)
+            s["job"] = _idle_job()
+            save_session(folder, s)
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    session = load_session(folder)
+    session["job"]["pid"] = os.getpid()
+    save_session(folder, session)
+    return {"accepted": True}
+
+
 def start_render(folder: Path, *, preview: bool) -> dict:
     session = load_session(folder)
     _raise_if_busy(folder, session)

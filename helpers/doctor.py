@@ -72,14 +72,14 @@ def run_doctor(*, which=shutil.which, run=subprocess.run, key_loader=_load_key_f
             name="claude_login",
             ok=logged_in,
             detail="logged in" if logged_in else "not logged in — open a terminal and run: claude auth login",
-            required=True,
+            required=False,
         ))
     else:
         checks.append(Check(
             name="claude_login",
             ok=False,
             detail="claude missing",
-            required=True,
+            required=False,
         ))
 
     ffmpeg = which("ffmpeg")

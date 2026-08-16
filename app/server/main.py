@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from app.server.claude import ensure_single_claude, stream_claude
 from app.server.inventory import VIDEO_EXTS, find_videos, inventory
-from app.server.jobs import start_approve_and_preview, start_render, start_transcribe
+from app.server.jobs import start_approve_and_preview, start_auto_edit, start_render, start_transcribe
 from app.server.paths import HELPERS
 from app.server.recents import add_recent, load_recents
 from app.server.session import load_session, save_session, session_path
@@ -134,7 +134,10 @@ def project_payload(folder: Path | None = None) -> dict:
         "has_preview": has_preview,
         "preview_mtime": preview_mtime,
         "has_final": (folder / "edit" / "final.mp4").is_file(),
-        "chat_enabled": packed_exists and bool(doctor.get("ok")),
+        "chat_enabled": packed_exists and any(
+            c.get("name") == "claude_login" and c.get("ok") for c in doctor.get("checks", [])
+        ),
+        "auto_edit_enabled": packed_exists,
         "job": session["job"],
         "stale": center_state == "stale",
     }
@@ -330,6 +333,19 @@ def _job_http_error(exc: RuntimeError) -> HTTPException:
     msg = str(exc)
     code = 409 if "busy" in msg.lower() else 400
     return HTTPException(status_code=code, detail=msg)
+
+
+@app.post("/api/auto-edit", status_code=202)
+def post_auto_edit() -> dict:
+    if CURRENT_FOLDER is None:
+        raise HTTPException(status_code=409, detail="no folder open")
+    packed = CURRENT_FOLDER / "edit" / "takes_packed.md"
+    if not packed.is_file():
+        raise HTTPException(status_code=400, detail="transcribe first")
+    try:
+        return start_auto_edit(CURRENT_FOLDER)
+    except RuntimeError as exc:
+        raise _job_http_error(exc) from exc
 
 
 @app.post("/api/approve", status_code=202)

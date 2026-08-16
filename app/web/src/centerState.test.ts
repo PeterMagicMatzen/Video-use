@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canChat, canTranscribe, canApprove, canRenderFinal } from "./buttons";
+import { canChat, canTranscribe, canApprove, canRenderFinal, canAutoEdit } from "./buttons";
 
 describe("buttons", () => {
   it("empty disables chat and approve", () => {
@@ -15,5 +15,10 @@ describe("buttons", () => {
     expect(canApprove("stale", true)).toBe(true);
     expect(canApprove("strategy-ready", true)).toBe(true);
     expect(canApprove("inventory", true)).toBe(false);
+  });
+  it("auto-edit works once packed, without Claude login", () => {
+    expect(canAutoEdit("packed", true)).toBe(true);
+    expect(canAutoEdit("inventory", false)).toBe(false);
+    expect(canAutoEdit("rendering", true)).toBe(false);
   });
 });

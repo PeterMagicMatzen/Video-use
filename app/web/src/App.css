@@ -85,6 +85,14 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button.primary {
+  background: #111;
+  color: #fff;
+  border: none;
+  padding: 10px 14px;
+  font-weight: 700;
+}
+
 pre {
   white-space: pre-wrap;
   word-break: break-word;
