@@ -3,17 +3,20 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.server.claude import ensure_single_claude, stream_claude
 from app.server.inventory import inventory
 from app.server.jobs import start_transcribe
 from app.server.paths import HELPERS
 from app.server.recents import add_recent, load_recents
-from app.server.session import load_session
+from app.server.session import load_session, save_session, session_path
 from app.server.state import derive_center_state
 
 if str(HELPERS) not in sys.path:
@@ -51,6 +54,14 @@ app.add_middleware(
 
 class FolderBody(BaseModel):
     path: str
+
+
+class ChatBody(BaseModel):
+    message: str
+
+
+class RejectBody(BaseModel):
+    note: str
 
 
 def project_payload(folder: Path | None = None) -> dict:
@@ -150,3 +161,112 @@ def post_transcribe() -> dict:
         return start_transcribe(CURRENT_FOLDER)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _idle_job() -> dict:
+    return {"kind": "idle", "pid": None, "started_at": None, "output": None, "log": None}
+
+
+def _persisted_job(folder: Path) -> dict:
+    path = session_path(folder)
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data.get("job") or {}
+
+
+def _require_open_folder() -> Path:
+    if CURRENT_FOLDER is None:
+        raise HTTPException(status_code=404, detail="no folder open")
+    return CURRENT_FOLDER
+
+
+def _chat_enabled(folder: Path) -> bool:
+    packed = (folder / "edit" / "takes_packed.md").is_file()
+    doctor = run_doctor().to_dict()
+    return packed and bool(doctor.get("ok"))
+
+
+def _require_chat_ready(folder: Path) -> dict:
+    if not _chat_enabled(folder):
+        raise HTTPException(status_code=400, detail="chat disabled")
+    session = load_session(folder)
+    persisted = _persisted_job(folder)
+    if persisted.get("pid") == 1 and persisted.get("kind") not in (None, "idle"):
+        raise HTTPException(status_code=409, detail="busy")
+    try:
+        ensure_single_claude(session)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if (session.get("job") or {}).get("kind") not in (None, "idle"):
+        raise HTTPException(status_code=409, detail="busy")
+    return session
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _begin_claude_job(folder: Path, session: dict, prompt: str) -> dict:
+    session["last_prompt"] = prompt
+    session["last_error"] = None
+    session["job"] = {
+        "kind": "claude",
+        "pid": os.getpid(),
+        "started_at": _now(),
+        "output": None,
+        "log": None,
+    }
+    save_session(folder, session)
+    return session
+
+
+def _stream_chat_turn(folder: Path, session: dict, prompt: str):
+    _begin_claude_job(folder, session, prompt)
+
+    def events():
+        try:
+            for chunk in stream_claude(folder=folder, prompt=prompt, session=session):
+                yield _sse({"text": chunk})
+            session["chat_after_approve"] = True
+            session["last_error"] = None
+        except Exception as exc:
+            session["last_error"] = str(exc)
+        finally:
+            session["job"] = _idle_job()
+            save_session(folder, session)
+        yield _sse({"done": True})
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@app.post("/api/chat")
+def post_chat(body: ChatBody):
+    folder = _require_open_folder()
+    session = _require_chat_ready(folder)
+    note = session.pop("pending_note", None)
+    prompt = f"{note}\n\n{body.message}" if note else body.message
+    return _stream_chat_turn(folder, session, prompt)
+
+
+@app.post("/api/chat/retry")
+def post_chat_retry():
+    folder = _require_open_folder()
+    session = _require_chat_ready(folder)
+    last = session.get("last_prompt")
+    if not last:
+        raise HTTPException(status_code=400, detail="no prompt to retry")
+    return _stream_chat_turn(folder, session, last)
+
+
+@app.post("/api/reject")
+def post_reject(body: RejectBody) -> dict:
+    folder = _require_open_folder()
+    session = load_session(folder)
+    session["pending_note"] = body.note
+    save_session(folder, session)
+    return {"ok": True}

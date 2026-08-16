@@ -34,6 +34,8 @@ These are the things where deviation produces silent failures or broken output. 
 
 Everything else in this document is a worked example. Deviate whenever the material calls for it.
 
+When you are launched by the video-use local app, do **not** transcribe, render, or call ffmpeg. The app owns those steps. Read `edit/takes_packed.md`, discuss strategy, and write `edit/edl.json` only after `STRATEGY_APPROVED`.
+
 ## Directory layout
 
 The skill lives in `video-use/`. User footage lives wherever they put it. All session outputs go into `<videos_dir>/edit/`.
