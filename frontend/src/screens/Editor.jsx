@@ -6,7 +6,7 @@ import LeftRail from "../components/LeftRail";
 import VideoStage from "../components/VideoStage";
 import TranscriptPanel from "../components/TranscriptPanel";
 
-export default function Editor({ projectId, onReset }) {
+export default function Editor({ projectId, onReset, onOpenProject }) {
   const [project, setProject] = useState(null);
   const [cuts, setCuts] = useState(null);
   const [styleKey, setStyleKey] = useState("bold");
@@ -82,6 +82,7 @@ export default function Editor({ projectId, onReset }) {
         setPreviewCuts={setPreviewCuts}
         updateCuts={updateCuts}
         onReset={onReset}
+        onOpenProject={onOpenProject}
       />
       <VideoStage
         projectId={projectId}

@@ -2,16 +2,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Clapperboard, Scissors, Download, Loader2, RotateCcw, CheckCircle2,
+  Smartphone, Monitor, ZoomIn, Type,
 } from "lucide-react";
 import { api, downloadUrl } from "../api";
 import { formatTime } from "../lib/captions";
+import ProjectLibrary from "./ProjectLibrary";
 
 export default function LeftRail({
-  project, cuts, styleKey, previewCuts, setPreviewCuts, updateCuts, onReset,
+  project, cuts, styleKey, previewCuts, setPreviewCuts, updateCuts, onReset, onOpenProject,
 }) {
   const [threshold, setThreshold] = useState(cuts?.settings?.pause_threshold ?? 0.8);
   const [fillers, setFillers] = useState(cuts?.settings?.remove_fillers ?? true);
   const [burnCaptions, setBurnCaptions] = useState(true);
+  const [reel, setReel] = useState({
+    aspect: project.reel_settings?.aspect ?? "9:16",
+    cinematic: project.reel_settings?.cinematic ?? true,
+    karaoke: project.reel_settings?.karaoke ?? true,
+    zoom_intensity: project.reel_settings?.zoom_intensity ?? 1.0,
+  });
   const [exportState, setExportState] = useState(project.export || { status: "idle" });
   const debounceRef = useRef(null);
   const pollRef = useRef(null);
@@ -36,8 +44,13 @@ export default function LeftRail({
       await api.post(`/projects/${project.id}/export`, {
         caption_style: styleKey,
         burn_captions: burnCaptions,
+        aspect: reel.aspect,
+        cinematic: reel.cinematic,
+        karaoke: reel.karaoke,
+        zoom_intensity: reel.zoom_intensity,
       });
       setExportState({ status: "processing", progress: 0 });
+      clearInterval(pollRef.current);
       pollRef.current = setInterval(async () => {
         const { data } = await api.get(`/projects/${project.id}`);
         setExportState(data.export);
@@ -52,7 +65,7 @@ export default function LeftRail({
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Export failed to start");
     }
-  }, [project.id, styleKey, burnCaptions]);
+  }, [project.id, styleKey, burnCaptions, reel]);
 
   const exporting = exportState.status === "processing";
 
@@ -68,7 +81,7 @@ export default function LeftRail({
           onClick={onReset}
           className="mt-3 flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors duration-150"
         >
-          <RotateCcw className="w-3 h-3" /> New project
+          <RotateCcw className="w-3 h-3" /> New reel
         </button>
       </div>
 
@@ -79,6 +92,13 @@ export default function LeftRail({
           {formatTime(project.duration)} · {project.width}×{project.height}
         </p>
       </div>
+
+      <ProjectLibrary
+        compact
+        currentId={project.id}
+        refreshKey={exportState.status}
+        onOpen={(p) => onOpenProject && onOpenProject(p.id)}
+      />
 
       <div className="border border-zinc-800 rounded-lg p-4 flex flex-col gap-4">
         <div className="flex items-center gap-2">
@@ -121,14 +141,77 @@ export default function LeftRail({
         )}
       </div>
 
+      <div className="border border-zinc-800 rounded-lg p-4 flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <ZoomIn className="w-4 h-4 text-accent" />
+          <p className="font-mono text-xs uppercase tracking-wider text-zinc-400">Cinematic</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            data-testid="editor-aspect-vertical"
+            onClick={() => setReel((r) => ({ ...r, aspect: "9:16" }))}
+            className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] border transition-colors duration-150 ${
+              reel.aspect === "9:16"
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-zinc-800 text-zinc-400 hover:text-white"
+            }`}
+          >
+            <Smartphone className="w-3 h-3" /> 9:16
+          </button>
+          <button
+            data-testid="editor-aspect-original"
+            onClick={() => setReel((r) => ({ ...r, aspect: "original" }))}
+            className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] border transition-colors duration-150 ${
+              reel.aspect === "original"
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-zinc-800 text-zinc-400 hover:text-white"
+            }`}
+          >
+            <Monitor className="w-3 h-3" /> Original
+          </button>
+        </div>
+        <ToggleRow
+          testId="editor-cinematic-toggle"
+          label="Speech-driven zooms"
+          hint={`${cuts?.moves?.length || 0} camera moves`}
+          checked={reel.cinematic}
+          onChange={(v) => setReel((r) => ({ ...r, cinematic: v }))}
+        />
+        <div>
+          <div className="flex justify-between mb-1.5">
+            <span className="text-xs text-zinc-400">Zoom intensity</span>
+            <span className="font-mono text-xs text-primary">
+              {Number(reel.zoom_intensity).toFixed(1)}×
+            </span>
+          </div>
+          <input
+            data-testid="editor-zoom-slider"
+            type="range" min="0.4" max="1.6" step="0.1"
+            value={reel.zoom_intensity}
+            disabled={!reel.cinematic}
+            onChange={(e) => setReel((r) => ({ ...r, zoom_intensity: parseFloat(e.target.value) }))}
+          />
+        </div>
+      </div>
+
       <div className="border border-zinc-800 rounded-lg p-4 flex flex-col gap-3 mt-auto">
-        <p className="font-mono text-xs uppercase tracking-wider text-zinc-400">Export</p>
+        <div className="flex items-center gap-2">
+          <Type className="w-4 h-4 text-accent" />
+          <p className="font-mono text-xs uppercase tracking-wider text-zinc-400">Export</p>
+        </div>
         <ToggleRow
           testId="burn-captions-toggle"
           label="Burn captions"
           hint={`style: ${styleKey}`}
           checked={burnCaptions}
           onChange={setBurnCaptions}
+        />
+        <ToggleRow
+          testId="editor-karaoke-toggle"
+          label="Karaoke highlight"
+          hint="word-by-word yellow"
+          checked={reel.karaoke}
+          onChange={(v) => setReel((r) => ({ ...r, karaoke: v }))}
         />
         {exporting && (
           <div data-testid="export-progress">
@@ -139,7 +222,7 @@ export default function LeftRail({
               />
             </div>
             <p className="font-mono text-[10px] text-zinc-500 mt-1">
-              rendering {exportState.progress || 0}%
+              {exportState.stage || "rendering"} {exportState.progress || 0}%
             </p>
           </div>
         )}
@@ -159,7 +242,7 @@ export default function LeftRail({
             className="flex items-center justify-center gap-2 bg-primary text-black font-heading font-bold text-sm rounded-full py-2.5 hover:scale-[1.03] transition-transform duration-150 disabled:opacity-50 disabled:hover:scale-100"
           >
             {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            {exporting ? "Rendering..." : "Export Video"}
+            {exporting ? "Rendering..." : "Export Reel"}
           </button>
         )}
         {exportState.status === "done" && (
@@ -188,7 +271,7 @@ function ToggleRow({ label, hint, checked, onChange, testId }) {
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className={`w-9 h-5 rounded-full relative transition-colors duration-200 ${
+        className={`w-9 h-5 rounded-full relative shrink-0 transition-colors duration-200 ${
           checked ? "bg-primary" : "bg-zinc-700"
         }`}
       >

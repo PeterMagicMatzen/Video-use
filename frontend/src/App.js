@@ -1,18 +1,25 @@
 import { useState } from "react";
 import { Toaster } from "sonner";
-import UploadScreen from "./screens/UploadScreen";
+import ReelStudio from "./screens/ReelStudio";
 import Editor from "./screens/Editor";
 
 export default function App() {
-  const [projectId, setProjectId] = useState(null);
+  const [view, setView] = useState({ mode: "studio", projectId: null });
 
   return (
     <div className="h-screen w-full bg-background text-white overflow-hidden">
       <Toaster theme="dark" position="top-center" richColors />
-      {projectId ? (
-        <Editor projectId={projectId} onReset={() => setProjectId(null)} />
+      {view.mode === "editor" ? (
+        <Editor
+          projectId={view.projectId}
+          key={view.projectId}
+          onReset={() => setView({ mode: "studio", projectId: null })}
+          onOpenProject={(pid) => setView({ mode: "editor", projectId: pid })}
+        />
       ) : (
-        <UploadScreen onReady={setProjectId} />
+        <ReelStudio
+          onOpenEditor={(pid) => setView({ mode: "editor", projectId: pid })}
+        />
       )}
     </div>
   );

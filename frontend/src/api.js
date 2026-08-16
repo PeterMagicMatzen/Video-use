@@ -6,7 +6,10 @@ export const API = `${BASE}/api`;
 export const api = axios.create({ baseURL: API });
 
 export const videoUrl = (pid) => `${API}/projects/${pid}/video`;
+export const exportVideoUrl = (pid, bust) =>
+  `${API}/projects/${pid}/export/video${bust ? `?t=${bust}` : ""}`;
 export const downloadUrl = (pid) => `${API}/projects/${pid}/export/download`;
+export const thumbUrl = (pid) => `${API}/projects/${pid}/thumbnail`;
 
 const CHUNK_SIZE = 5 * 1024 * 1024;
 
@@ -28,3 +31,5 @@ export async function uploadVideo(file, onProgress) {
   await api.post(`/projects/${pid}/upload/complete`);
   return pid;
 }
+
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
