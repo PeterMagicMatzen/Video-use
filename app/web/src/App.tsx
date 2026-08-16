@@ -5,13 +5,14 @@ import {
   getRecents,
   getState,
   postApprove,
-  postChat,
   postFolder,
   postFolderBrowse,
   postOpenEdit,
   postReject,
   postRenderFinal,
   postTranscribe,
+  retryChat,
+  streamChat,
 } from "./api";
 import { canApprove, canChat, canRenderFinal, canTranscribe } from "./buttons";
 import type { Doctor, ProjectPayload } from "./types";
@@ -43,6 +44,7 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [chatLog, setChatLog] = useState<ChatLine[]>([]);
   const [chatNotice, setChatNotice] = useState<string | null>(null);
+  const [chatRetry, setChatRetry] = useState(false);
 
   const applyPayload = useCallback((next: ProjectPayload) => {
     setPayload(next);
@@ -110,6 +112,35 @@ export default function App() {
   }
 
   const chatOn = canChat(center, doctorOk);
+
+  function makeAppender() {
+    let started = false;
+    return (t: string) => {
+      setChatLog((log) => {
+        const last = log[log.length - 1];
+        if (started && last?.role === "assistant") {
+          return [...log.slice(0, -1), { role: "assistant", text: last.text + t }];
+        }
+        return [...log, { role: "assistant", text: t }];
+      });
+      started = true;
+    };
+  }
+
+  async function runChat(fn: (onText: (t: string) => void) => Promise<void>) {
+    setChatNotice(null);
+    setChatRetry(false);
+    setBusy(true);
+    try {
+      await fn(makeAppender());
+      await refresh();
+    } catch (err) {
+      setChatNotice(errText(err));
+      setChatRetry(true);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="app">
@@ -241,29 +272,30 @@ export default function App() {
           onChange={(e) => setDraft(e.target.value)}
           placeholder={chatOn ? "Strategy notes…" : "Chat disabled until packed"}
         />
-        <button
-          type="button"
-          disabled={busy || !chatOn || !draft.trim()}
-          onClick={() => {
-            const message = draft.trim();
-            if (!message) return;
-            setDraft("");
-            setChatNotice(null);
-            setChatLog((log) => [...log, { role: "user", text: message }]);
-            void run(async () => {
-              const result = await postChat(message);
-              if (!result.connected) {
-                setChatNotice("chat not connected");
-                return;
-              }
-              if (result.text) {
-                setChatLog((log) => [...log, { role: "assistant", text: result.text }]);
-              }
-            });
-          }}
-        >
-          Send
-        </button>
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy || !chatOn || !draft.trim()}
+            onClick={() => {
+              const message = draft.trim();
+              if (!message) return;
+              setDraft("");
+              setChatLog((log) => [...log, { role: "user", text: message }]);
+              void runChat((onText) => streamChat(message, onText));
+            }}
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            disabled={busy || !chatOn || !chatRetry}
+            onClick={() => {
+              void runChat((onText) => retryChat(onText));
+            }}
+          >
+            Retry
+          </button>
+        </div>
       </aside>
     </div>
   );

@@ -66,25 +66,49 @@ export async function postReject(note: string) {
   if (!r.ok) throw new Error(await r.text());
 }
 
-/** JSON fallback if the route is not SSE. Streaming tokens is Task 12. */
-export async function postChat(message: string): Promise<{ connected: boolean; text: string }> {
+export async function streamChat(message: string, onText: (t: string) => void) {
   const r = await fetch(`${API}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
   });
-  if (r.status === 404) return { connected: false, text: "" };
-  if (!r.ok) throw new Error(await r.text());
-  const ctype = r.headers.get("content-type") || "";
-  if (ctype.includes("application/json")) {
-    try {
-      const json = (await r.json()) as { text?: string };
-      return { connected: true, text: typeof json.text === "string" ? json.text : "" };
-    } catch {
-      return { connected: true, text: "" };
+  if (!r.ok || !r.body) throw new Error(await r.text());
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop() || "";
+    for (const part of parts) {
+      const line = part.replace(/^data:\s*/, "");
+      if (!line) continue;
+      const ev = JSON.parse(line);
+      if (ev.text) onText(ev.text);
     }
   }
-  // Drain SSE so the turn can finish; UI polls GET /api/state until job.idle.
-  void r.text();
-  return { connected: true, text: "" };
+}
+
+/** Same SSE reader loop as streamChat, against POST /api/chat/retry. */
+export async function retryChat(onText: (t: string) => void) {
+  const r = await fetch(`${API}/api/chat/retry`, { method: "POST" });
+  if (!r.ok || !r.body) throw new Error(await r.text());
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop() || "";
+    for (const part of parts) {
+      const line = part.replace(/^data:\s*/, "");
+      if (!line) continue;
+      const ev = JSON.parse(line);
+      if (ev.text) onText(ev.text);
+    }
+  }
 }
