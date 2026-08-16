@@ -1,7 +1,7 @@
 # video-use local app
 
 Date: 2026-08-16  
-Status: draft, awaiting user review  
+Status: approved  
 Repo: `C:\Users\Varun B\Developer\video-use` (existing clone; Claude skill is a junction to this path)
 
 A local website on this Windows machine that turns the video-use skill + helpers into a talking-head editor: drop takes, chat a strategy, review transcript and ranges, preview, then render `final.mp4`.
