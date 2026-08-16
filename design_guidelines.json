@@ -1,0 +1,117 @@
+{
+  "theme": "dark",
+  "archetype": "The Performance Pro / Neon Creator",
+  "typography": {
+    "fonts": {
+      "heading": "'Outfit', sans-serif",
+      "body": "'Inter', sans-serif",
+      "mono": "'JetBrains Mono', monospace"
+    },
+    "scale": {
+      "h1": "text-4xl sm:text-5xl tracking-tighter font-bold",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-semibold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium",
+      "body": "text-sm sm:text-base leading-relaxed text-zinc-300",
+      "mono": "text-xs tracking-wider uppercase font-medium text-zinc-400"
+    },
+    "rules": [
+      "NEVER use generic fonts for headings. Always apply tracking-tight to headings.",
+      "Use JetBrains Mono for timecodes, sliders, toggles, and metadata.",
+      "Ensure hierarchy jump rule: maximum 2 Tailwind steps between heading and subheading."
+    ]
+  },
+  "colors": {
+    "css_variables": {
+      "--background": "240 10% 4%",
+      "--foreground": "0 0% 100%",
+      "--card": "240 10% 6%",
+      "--card-foreground": "0 0% 100%",
+      "--popover": "240 10% 6%",
+      "--popover-foreground": "0 0% 100%",
+      "--primary": "65 100% 50%",
+      "--primary-foreground": "0 0% 0%",
+      "--secondary": "240 10% 12%",
+      "--secondary-foreground": "0 0% 100%",
+      "--muted": "240 10% 15%",
+      "--muted-foreground": "240 5% 65%",
+      "--accent": "180 100% 50%",
+      "--accent-foreground": "0 0% 0%",
+      "--destructive": "0 100% 50%",
+      "--destructive-foreground": "0 0% 100%",
+      "--border": "240 10% 15%",
+      "--input": "240 10% 15%",
+      "--ring": "65 100% 50%",
+      "--radius": "0.5rem"
+    },
+    "strategy": [
+      "Use Deep Obsidian base (#0A0A0A). Do not use pure black (#000000) for surfaces to maintain depth.",
+      "Primary Accent: Cyber Yellow (#D4FF00). Use for active states, selected words in transcript, main CTA (Export).",
+      "Hover text: Always apply explicit hover states (e.g., hover:text-white hover:bg-zinc-800).",
+      "Avoid 'SaaS Blue' or generic purples. This is a high-energy creator tool."
+    ]
+  },
+  "layout": {
+    "structure": "Three-pane asymmetric editor layout.",
+    "regions": {
+      "left_rail": {
+        "width": "w-72",
+        "description": "Media Library, Project List, Video Upload Dropzone.",
+        "style": "bg-[#09090b] border-r border-zinc-800/50 p-6 flex flex-col gap-6"
+      },
+      "center_canvas": {
+        "flex": "flex-1",
+        "description": "Video Preview Player, Transport Controls, Auto-Cut Toggle, Caption Style Gallery.",
+        "style": "bg-[#000000] relative flex flex-col p-8 overflow-y-auto"
+      },
+      "right_rail": {
+        "width": "w-96",
+        "description": "Word Timeline, Transcript Editor, Cut Markers.",
+        "style": "bg-[#09090b] border-l border-zinc-800/50 p-6 flex flex-col gap-4 shadow-xl"
+      }
+    },
+    "grid_bento": "Use dense Grid borders for the Caption Style Gallery (e.g., grid-cols-2 gap-4) in the center pane below the player."
+  },
+  "components": {
+    "buttons": "Pill-shaped (rounded-full) or sharp edges (rounded-md). Main Export button MUST be bright Cyber Yellow (bg-primary text-black) with hover scale-up.",
+    "upload_dropzone": "Dashed border. On hover, border turns Cyber Yellow and background tints slightly. Use a large upload icon.",
+    "caption_cards": "Dark grey cards with 1px border. When selected, border becomes 2px Cyber Yellow and an inner glow applies.",
+    "sliders": "Auto-cut slider uses Cyber Yellow track. Minimalist thumb.",
+    "transcript_words": "Words are rendered as inline blocks. Active/playing word gets bg-primary/20 and text-primary. Filler words marked with faint red underline or strikethrough.",
+    "toggle": "Shadcn switch, customized to use Cyber Yellow when checked."
+  },
+  "motion": {
+    "interactions": [
+      "Hovering interactive elements should slightly lift (-translate-y-0.5) and brighten.",
+      "Caption words in the preview canvas should bounce or pop in (staggered Framer Motion).",
+      "Smooth layout transitions when panels collapse or expand."
+    ]
+  },
+  "media": {
+    "image_urls": {
+      "video_poster_placeholder": {
+        "url": "https://images.unsplash.com/photo-1758598306845-8630d064a244?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwzfHxwZXJzb24lMjB0YWxraW5nJTIwdG8lMjBjYW1lcmElMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODY5MDM5MTd8MA&ixlib=rb-4.1.0&q=85",
+        "description": "A woman talking to the camera, used as a placeholder for the video player."
+      }
+    },
+    "icons": "Use 'lucide-react'. Favor minimalist, technical icons (e.g., Scissors for Auto-Cut, Wand for Styles, Play/Pause for transport)."
+  },
+  "instructions_to_main_agent": {
+    "setup": "Install Google Fonts (Outfit, Inter, JetBrains Mono) in index.html or global css. Setup Tailwind CSS with the provided variables.",
+    "architecture": "Build a full-screen layout (h-screen w-full flex overflow-hidden). Never let the body scroll; scroll inside the specific panels.",
+    "shadcn_components": "Install and heavily customize slider, switch, button, scroll-area, tabs, card.",
+    "testing_attributes": "Add data-testid attributes to ALL interactive elements (e.g., 'upload-dropzone', 'auto-cut-slider', 'export-button', 'transcript-word')."
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic outputs. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts. Use the 3-pane asymmetric layout exactly as described.",
+    "Create depth through layered design elements with z-index hierarchy and subtle 1px borders.",
+    "Use glass-morphism effects carefully; prefer solid obsidian panels for this pro tool.",
+    "You MUST NOT apply universal transition (transition: all). Always add transitions for specific properties.",
+    "You MUST NOT center align the app container. Align text to the left.",
+    "Always use modern button styles (Cyber Yellow pill for Export).",
+    "NEVER use Emoji characters like \ud83e\udd16\ud83e\udde0 for icons. Use lucide-react.",
+    "Every interaction needs micro-animations. Static = dead.",
+    "Ensure the UI feels like a professional video editing command center, not a generic SaaS form."
+  ]
+}
