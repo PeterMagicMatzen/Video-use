@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.server.inventory import inventory
+from app.server.jobs import start_transcribe
 from app.server.paths import HELPERS
 from app.server.recents import add_recent, load_recents
 from app.server.session import load_session
@@ -135,3 +136,17 @@ def post_open_edit() -> dict:
     if sys.platform == "win32":
         os.startfile(str(edit))
     return {"ok": True}
+
+
+@app.post("/api/transcribe", status_code=202)
+def post_transcribe() -> dict:
+    if CURRENT_FOLDER is None:
+        raise HTTPException(status_code=409, detail="no folder open")
+    doctor = run_doctor().to_dict()
+    checks = {c["name"]: c for c in doctor["checks"]}
+    if not checks.get("elevenlabs", {}).get("ok") or not checks.get("ffmpeg", {}).get("ok"):
+        raise HTTPException(status_code=400, detail="doctor elevenlabs/ffmpeg not ok")
+    try:
+        return start_transcribe(CURRENT_FOLDER)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

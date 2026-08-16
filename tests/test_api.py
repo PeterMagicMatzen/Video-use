@@ -45,3 +45,32 @@ def test_no_transcribe_route_implied(client: TestClient, tmp_path: Path):
     client.post("/api/folder", json={"path": str(tmp_path)})
     # Opening a folder must not create takes_packed.md
     assert not (tmp_path / "edit" / "takes_packed.md").exists()
+
+
+def test_transcribe_requires_explicit_click(client: TestClient, tmp_path: Path, monkeypatch):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    called = {"n": 0}
+    from app.server import jobs as jobs_mod
+    def fake_start(folder):
+        called["n"] += 1
+        return {"accepted": True}
+    monkeypatch.setattr(jobs_mod, "start_transcribe", fake_start)
+    # re-import routes use the name bound in main — patch app.server.main.start_transcribe
+    import app.server.main as main_mod
+    monkeypatch.setattr(main_mod, "start_transcribe", fake_start)
+    r = client.post("/api/transcribe")
+    assert r.status_code == 202
+    assert called["n"] == 1
+
+
+def test_transcribe_409_when_busy(client: TestClient, tmp_path: Path):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    from app.server.session import load_session, save_session
+    s = load_session(tmp_path)
+    s["job"]["kind"] = "transcribe"
+    s["job"]["pid"] = 1
+    save_session(tmp_path, s)
+    r = client.post("/api/transcribe")
+    assert r.status_code == 409
