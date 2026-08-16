@@ -14,6 +14,7 @@ def test_first_turn_has_no_resume(tmp_path: Path):
     assert cmd[1] == "-p"
     assert cmd[2] == "hello"
     assert cmd.count("hello") == 1
+    assert "--verbose" in cmd
     assert "--continue" not in cmd
     assert "--resume" not in cmd
     assert "--dangerously-skip-permissions" not in cmd

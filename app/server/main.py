@@ -68,7 +68,19 @@ def resolve_footage_path(raw: str) -> Path:
     return path
 
 
-app = FastAPI()
+def restore_last_folder() -> None:
+    recents = load_recents()
+    if not recents:
+        return
+    path = Path(recents[0])
+    if path.is_dir():
+        try:
+            _open_folder(path)
+        except HTTPException:
+            return
+
+
+app = FastAPI(on_startup=[restore_last_folder])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
