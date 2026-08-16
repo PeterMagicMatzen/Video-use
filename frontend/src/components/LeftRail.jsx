@@ -20,6 +20,7 @@ export default function LeftRail({
     karaoke: project.reel_settings?.karaoke ?? true,
     punch_ins: project.reel_settings?.punch_ins ?? true,
     zoom_intensity: project.reel_settings?.zoom_intensity ?? 1.0,
+    punch_sensitivity: project.reel_settings?.punch_sensitivity ?? 0.5,
   });
   const [exportState, setExportState] = useState(project.export || { status: "idle" });
   const debounceRef = useRef(null);
@@ -50,6 +51,7 @@ export default function LeftRail({
         karaoke: reel.karaoke,
         punch_ins: reel.punch_ins,
         zoom_intensity: reel.zoom_intensity,
+        punch_sensitivity: reel.punch_sensitivity,
       });
       setExportState({ status: "processing", progress: 0 });
       clearInterval(pollRef.current);
@@ -200,6 +202,29 @@ export default function LeftRail({
             disabled={!reel.cinematic}
             onChange={(e) => setReel((r) => ({ ...r, zoom_intensity: parseFloat(e.target.value) }))}
           />
+        </div>
+        <div>
+          <div className="flex justify-between mb-1.5">
+            <span className="text-xs text-zinc-400">Punch sensitivity</span>
+            <span className="font-mono text-xs text-primary">
+              {reel.punch_sensitivity <= 0.34
+                ? "Rare · big"
+                : reel.punch_sensitivity >= 0.67
+                ? "Frequent · subtle"
+                : "Balanced"}
+            </span>
+          </div>
+          <input
+            data-testid="editor-punch-sensitivity-slider"
+            type="range" min="0" max="1" step="0.1"
+            value={reel.punch_sensitivity}
+            disabled={!reel.cinematic || !reel.punch_ins}
+            onChange={(e) => setReel((r) => ({ ...r, punch_sensitivity: parseFloat(e.target.value) }))}
+          />
+          <div className="flex justify-between mt-1">
+            <span className="text-[9px] text-zinc-600">Rare &amp; big</span>
+            <span className="text-[9px] text-zinc-600">Frequent &amp; subtle</span>
+          </div>
         </div>
       </div>
 

@@ -323,6 +323,7 @@ def render_export(source: Path, words: list, ranges: list, style_key: str, burn:
                   work_dir: Path, out_path: Path, aspect: str = "original",
                   cinematic: bool = True, karaoke: bool = True,
                   zoom_intensity: float = 1.0, punch_ins: bool = True,
+                  punch_sensitivity: float = 0.5,
                   progress_cb=None) -> dict:
     work_dir.mkdir(parents=True, exist_ok=True)
     info = probe(source)
@@ -339,7 +340,7 @@ def render_export(source: Path, words: list, ranges: list, style_key: str, burn:
     if progress_cb:
         progress_cb(6)
 
-    moves = zooms.plan(words, ranges, zoom_intensity, punch_ins) if cinematic else []
+    moves = zooms.plan(words, ranges, zoom_intensity, punch_ins, punch_sensitivity) if cinematic else []
 
     seg_paths = []
     total = max(1, len(ranges))

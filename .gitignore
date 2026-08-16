@@ -66,3 +66,7 @@ library/broll/*.mp4
 library/photos/*.jpg
 library/photos/*.jpeg
 library/photos/*.png
+.env.*
+*.env
+credentials.json
+.credentials

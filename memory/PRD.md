@@ -74,8 +74,18 @@ User choices:
 - CLOUDINARY_CLOUD_NAME set to `clipcut` but Cloudinary rejects it ("Invalid cloud_name") — the
   upload is wrapped so exports still succeed and the error surfaces in the UI (`cloud-error`)
 
+### 2026-06 (session 4 — punch sensitivity dial + Cloudinary fix)
+- CLOUDINARY_CLOUD_NAME corrected to `poaievfx` — api.ping ok, real export uploads + CDN 9:16
+  g_auto reframe delivers HTTP 200. P0 blocker RESOLVED.
+- Added Punch Sensitivity dial (0..1, default 0.5). zooms.py `_sensitivity_curve` maps the dial:
+  low = rare & big (high threshold 1.25, min_gap 2.4s, ≤2 snaps, amp ×1.7), high = frequent &
+  subtle (threshold 0.5, gap 0.7s, up to 9 snaps, amp ×0.8). Verified: sens 0.0→2 snaps/big amps,
+  1.0→5 snaps/subtle amps.
+- Wired `punch_sensitivity` through ReelSettings/ExportBody/compute_cut_state/render_export; slider
+  in both ReelStudio recipe (`punch-sensitivity-slider`) and editor LeftRail
+  (`editor-punch-sensitivity-slider`), disabled when cinematic/punch-ins are off.
+
 ## Backlog
-- P0: correct CLOUDINARY_CLOUD_NAME from the user → cloud reframe + CDN preview delivery
 - P1: editable transcript text before export (fix Scribe mistranscriptions)
 - P1: draggable/resizable caption box in the preview that maps 1:1 to the export
 - P2: beat-synced b-roll / punch-in on keyword hits

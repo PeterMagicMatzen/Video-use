@@ -30,6 +30,7 @@ export default function ReelStudio({ onOpenEditor }) {
     karaoke: true,
     punch_ins: true,
     zoom_intensity: 1.0,
+    punch_sensitivity: 0.5,
     caption_style: "bold",
   });
   const inputRef = useRef(null);
@@ -66,6 +67,7 @@ export default function ReelStudio({ onOpenEditor }) {
         karaoke: opts.karaoke,
         punch_ins: opts.punch_ins,
         zoom_intensity: opts.zoom_intensity,
+        punch_sensitivity: opts.punch_sensitivity,
       });
       const poll = setInterval(async () => {
         try {
@@ -456,6 +458,32 @@ function Options({ opts, setOpts }) {
             <p className="text-[10px] text-zinc-600 mt-1">
               Hard zoom snap on your most emphasised words.
             </p>
+            <div className="mt-2.5">
+              <div className="flex justify-between mb-1.5">
+                <span className="text-[10px] text-zinc-500">Punch sensitivity</span>
+                <span className="font-mono text-[10px] text-primary">
+                  {opts.punch_sensitivity <= 0.34
+                    ? "Rare · big"
+                    : opts.punch_sensitivity >= 0.67
+                    ? "Frequent · subtle"
+                    : "Balanced"}
+                </span>
+              </div>
+              <input
+                data-testid="punch-sensitivity-slider"
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={opts.punch_sensitivity}
+                disabled={!opts.cinematic || !opts.punch_ins}
+                onChange={(e) => set({ punch_sensitivity: parseFloat(e.target.value) })}
+              />
+              <div className="flex justify-between mt-1">
+                <span className="text-[9px] text-zinc-600">Rare &amp; big</span>
+                <span className="text-[9px] text-zinc-600">Frequent &amp; subtle</span>
+              </div>
+            </div>
           </div>
           <div className="mt-3">
             <div className="flex justify-between mb-1.5">

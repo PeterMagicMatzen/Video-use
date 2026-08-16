@@ -42,6 +42,7 @@ DEFAULT_REEL = {
     "karaoke": True,
     "zoom_intensity": 1.0,
     "punch_ins": True,
+    "punch_sensitivity": 0.5,
     "burn_captions": True,
 }
 
@@ -79,7 +80,8 @@ def compute_cut_state(doc: dict) -> dict:
         "removed_duration": round(max(0, duration - kept), 2),
         "settings": settings,
         "moves": zooms.plan(words, ranges, reel.get("zoom_intensity", 1.0),
-                            reel.get("punch_ins", True)) if reel.get("cinematic") else [],
+                            reel.get("punch_ins", True),
+                            reel.get("punch_sensitivity", 0.5)) if reel.get("cinematic") else [],
     }
 
 
@@ -317,6 +319,7 @@ class ReelSettings(BaseModel):
     karaoke: bool = True
     zoom_intensity: float = 1.0
     punch_ins: bool = True
+    punch_sensitivity: float = 0.5
     burn_captions: bool = True
 
 
@@ -329,6 +332,7 @@ def _clean_reel(body: ReelSettings) -> dict:
         "karaoke": body.karaoke,
         "zoom_intensity": max(0.2, min(1.6, body.zoom_intensity)),
         "punch_ins": body.punch_ins,
+        "punch_sensitivity": max(0.0, min(1.0, body.punch_sensitivity)),
         "burn_captions": body.burn_captions,
     }
 
@@ -375,6 +379,7 @@ class ExportBody(BaseModel):
     karaoke: bool = True
     zoom_intensity: float = 1.0
     punch_ins: bool = True
+    punch_sensitivity: float = 0.5
 
 
 @api.post("/projects/{pid}/export")
@@ -389,6 +394,7 @@ def start_export(pid: str, body: ExportBody):
     reel = _clean_reel(ReelSettings(
         aspect=body.aspect, cinematic=body.cinematic, karaoke=body.karaoke,
         zoom_intensity=body.zoom_intensity, punch_ins=body.punch_ins,
+        punch_sensitivity=body.punch_sensitivity,
         burn_captions=body.burn_captions,
     ))
     projects.update_one({"id": pid}, {"$set": {
@@ -424,6 +430,7 @@ def _run_export(pid: str, style_key: str, reel: dict):
             karaoke=reel["karaoke"],
             zoom_intensity=reel["zoom_intensity"],
             punch_ins=reel.get("punch_ins", True),
+            punch_sensitivity=reel.get("punch_sensitivity", 0.5),
             progress_cb=cb,
         )
         cloud = {}

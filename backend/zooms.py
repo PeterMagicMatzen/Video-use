@@ -2,9 +2,17 @@
 
 PUNCH_PUNCT = {"!", "?"}
 SNAP_DECAY = 0.38
-MIN_SNAP_GAP = 1.4
-MAX_SNAPS_PER_SEGMENT = 5
-SNAP_THRESHOLD = 0.85
+
+
+def _sensitivity_curve(sensitivity: float) -> dict:
+    """Map a 0..1 dial into snap tuning. Low = rare & big, high = frequent & subtle."""
+    s = max(0.0, min(1.0, sensitivity))
+    return {
+        "threshold": 1.25 - 0.75 * s,   # higher bar (rarer) at low s
+        "min_gap": 2.4 - 1.7 * s,       # more spacing (rarer) at low s
+        "max_snaps": round(2 + 7 * s),  # fewer snaps at low s
+        "amp_mult": 1.7 - 0.9 * s,      # bigger snaps at low s, subtler at high s
+    }
 
 HOOK_WORDS = {
     "never", "always", "everyone", "nobody", "everything", "nothing", "best", "worst",
@@ -62,12 +70,12 @@ def _emphasis_score(word: dict, next_gap: float, pace: float = 0.09) -> float:
 
 
 def _snaps(in_range: list, seg_start: float, seg_end: float,
-           base_top: float, intensity: float, pace: float) -> list:
+           base_top: float, intensity: float, pace: float, tune: dict) -> list:
     scored = []
     for i, w in enumerate(in_range):
         nxt = in_range[i + 1]["start"] if i + 1 < len(in_range) else seg_end
         score = _emphasis_score(w, max(0.0, nxt - w["end"]), pace)
-        if score >= SNAP_THRESHOLD:
+        if score >= tune["threshold"]:
             scored.append((score, w))
     scored.sort(key=lambda s: -s[0])
 
@@ -76,10 +84,10 @@ def _snaps(in_range: list, seg_start: float, seg_end: float,
         t = max(0.0, w["start"] - seg_start)
         if t > (seg_end - seg_start) - 0.12:
             continue
-        if any(abs(t - p["t"]) < MIN_SNAP_GAP for p in picked):
+        if any(abs(t - p["t"]) < tune["min_gap"] for p in picked):
             continue
-        amp = (0.07 + 0.07 * min(1.0, score / 2.4)) * max(0.2, min(1.6, intensity))
-        amp = min(amp, max(0.02, 1.26 - base_top))
+        amp = (0.07 + 0.07 * min(1.0, score / 2.4)) * max(0.2, min(1.6, intensity)) * tune["amp_mult"]
+        amp = min(amp, max(0.02, 1.32 - base_top))
         picked.append({
             "t": round(t, 3),
             "amp": round(amp, 4),
@@ -87,15 +95,17 @@ def _snaps(in_range: list, seg_start: float, seg_end: float,
             "word": (w.get("text") or "").strip(),
             "score": round(score, 2),
         })
-        if len(picked) >= MAX_SNAPS_PER_SEGMENT:
+        if len(picked) >= tune["max_snaps"]:
             break
     picked.sort(key=lambda p: p["t"])
     return picked
 
 
-def plan(words: list, ranges: list, intensity: float = 1.0, punch_ins: bool = True) -> list:
+def plan(words: list, ranges: list, intensity: float = 1.0, punch_ins: bool = True,
+         punch_sensitivity: float = 0.5) -> list:
     items = [w for w in words if w.get("type") == "word" and w.get("start") is not None]
     pace = _pace(items)
+    tune = _sensitivity_curve(punch_sensitivity)
     moves = []
     for i, (a, b) in enumerate(ranges):
         dur = max(0.1, b - a)
@@ -116,7 +126,7 @@ def plan(words: list, ranges: list, intensity: float = 1.0, punch_ins: bool = Tr
         else:
             kind, z0, z1 = "pull out", 1.0 + amp, 1.0
 
-        snaps = _snaps(in_range, a, b, max(z0, z1), intensity, pace) if punch_ins else []
+        snaps = _snaps(in_range, a, b, max(z0, z1), intensity, pace, tune) if punch_ins else []
         moves.append({
             "index": i,
             "kind": kind,
