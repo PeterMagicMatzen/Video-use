@@ -133,6 +133,8 @@ def transcribe_one(
 
 
 def main() -> None:
+    from stdio import configure_stdio
+    configure_stdio()
     ap = argparse.ArgumentParser(description="Transcribe a video with ElevenLabs Scribe")
     ap.add_argument("video", type=Path, help="Path to video file")
     ap.add_argument(

@@ -163,6 +163,8 @@ def render_markdown(entries: list[tuple[str, float, list[dict]]], silence_thresh
 
 
 def main() -> None:
+    from stdio import configure_stdio
+    configure_stdio()
     ap = argparse.ArgumentParser(description="Pack Scribe transcripts into takes_packed.md")
     ap.add_argument("--edit-dir", type=Path, required=True, help="Edit directory containing transcripts/")
     ap.add_argument(

@@ -573,6 +573,8 @@ def build_final_composite(
 
 
 def main() -> None:
+    from stdio import configure_stdio
+    configure_stdio()
     ap = argparse.ArgumentParser(description="Render a video from an EDL")
     ap.add_argument("edl", type=Path, help="Path to edl.json")
     ap.add_argument("-o", "--output", type=Path, required=True, help="Output video path")

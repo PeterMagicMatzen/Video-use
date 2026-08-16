@@ -35,6 +35,8 @@ def find_videos(videos_dir: Path) -> list[Path]:
 
 
 def main() -> None:
+    from stdio import configure_stdio
+    configure_stdio()
     ap = argparse.ArgumentParser(description="Parallel batch transcription of a videos directory")
     ap.add_argument("videos_dir", type=Path, help="Directory containing source videos")
     ap.add_argument(

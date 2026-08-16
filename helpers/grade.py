@@ -292,6 +292,8 @@ def apply_grade(input_path: Path, output_path: Path, filter_string: str) -> None
 
 
 def main() -> None:
+    from stdio import configure_stdio
+    configure_stdio()
     ap = argparse.ArgumentParser(description="Apply a color grade via ffmpeg filter chain")
     ap.add_argument("input", type=Path, nargs="?", help="Input video")
     ap.add_argument("-o", "--output", type=Path, help="Output video")
