@@ -48,12 +48,9 @@ except Exception:
 # baseline roughly 30% up from the bottom on any aspect — clear of the UI on
 # every major vertical-video platform. Do not drop this below ~75 without a
 # specific reason.
-SUB_FORCE_STYLE = (
-    "FontName=Helvetica,FontSize=18,Bold=1,"
-    "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,"
-    "BorderStyle=1,Outline=2,Shadow=0,"
-    "Alignment=2,MarginV=90"
-)
+from edl import force_style, escape_subtitles_path
+
+SUB_FORCE_STYLE = force_style()
 
 # -------- Helpers ------------------------------------------------------------
 
@@ -499,6 +496,7 @@ def build_final_composite(
     subtitles_path: Path | None,
     out_path: Path,
     edit_dir: Path,
+    force_style_str: str = SUB_FORCE_STYLE,
 ) -> None:
     """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
 
@@ -537,9 +535,9 @@ def build_final_composite(
 
     # Subtitles LAST — Rule 1
     if has_subs:
-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
+        subs_abs = escape_subtitles_path(subtitles_path)
         filter_parts.append(
-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
+            f"{current}subtitles='{subs_abs}':force_style='{force_style_str}'[outv]"
         )
         out_label = "[outv]"
     else:
@@ -642,13 +640,22 @@ def main() -> None:
 
     # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
     overlays = edl.get("overlays") or []
+    style = (
+        force_style(extra=str(edl["subtitle_style"]))
+        if edl.get("subtitle_style")
+        else SUB_FORCE_STYLE
+    )
     if args.no_loudnorm:
         # Composite directly to final output
-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
+        build_final_composite(
+            base_path, overlays, subs_path, out_path, edit_dir, force_style_str=style
+        )
     else:
         # Composite to a temp file, then run loudnorm → final output
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        build_final_composite(
+            base_path, overlays, subs_path, tmp_composite, edit_dir, force_style_str=style
+        )
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)
