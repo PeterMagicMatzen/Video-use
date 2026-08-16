@@ -90,7 +90,7 @@ def start_transcribe(folder: Path) -> dict:
                 text = (batch.stderr or batch.stdout or "")
                 if "401" in text or "quota" in text.lower() or "returned 401" in text:
                     raise RuntimeError("ElevenLabs rejected the key. Check Developer/video-use/.env")
-                raise RuntimeError(text[-400:] or "transcribe failed")
+                raise RuntimeError(text[-400:] or f"transcribe failed (exit {batch.returncode})")
             packed = proc_mod.run_helper("pack_transcripts.py", ["--edit-dir", str(folder / "edit")])
             log.write_text(log.read_text(encoding="utf-8") + (packed.stdout or "") + (packed.stderr or ""), encoding="utf-8")
             if packed.returncode != 0:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from app.server.paths import HELPERS
@@ -15,7 +16,8 @@ def helper_env() -> dict:
 
 
 def run_helper(script: str, args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess:
-    cmd = ["python", str(HELPERS / script), *args]
+    exe = sys.executable or "python"
+    cmd = [exe, str(HELPERS / script), *args]
     return subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
