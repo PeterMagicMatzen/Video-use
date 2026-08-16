@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -54,6 +55,32 @@ def run_doctor(*, which=shutil.which, run=subprocess.run, key_loader=_load_key_f
     for name in ("ffmpeg", "ffprobe", "claude"):
         path = which(name)
         checks.append(Check(name=name, ok=bool(path), detail=path or "not on PATH", required=True))
+
+    claude_bin = which("claude")
+    if claude_bin:
+        auth = run(
+            [claude_bin, "auth", "status"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        logged_in = False
+        try:
+            payload = json.loads((auth.stdout or "").strip() or "{}")
+            logged_in = bool(payload.get("loggedIn"))
+        except json.JSONDecodeError:
+            logged_in = False
+        checks.append(Check(
+            name="claude_login",
+            ok=logged_in,
+            detail="logged in" if logged_in else "not logged in — open a terminal and run: claude auth login",
+            required=True,
+        ))
+    else:
+        checks.append(Check(
+            name="claude_login",
+            ok=False,
+            detail="claude missing",
+            required=True,
+        ))
 
     ffmpeg = which("ffmpeg")
     if ffmpeg:

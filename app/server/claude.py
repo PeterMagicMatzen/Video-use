@@ -190,6 +190,10 @@ def stream_claude(*, folder: Path, prompt: str, session: dict) -> Iterator[str]:
         returncode = proc.wait(timeout=max(1.0, deadline - time.monotonic()))
         if returncode != 0:
             err = "".join(stderr_chunks).strip()
+            if "Not logged in" in err or "/login" in err:
+                raise RuntimeError(
+                    "Claude Code is not logged in. Open PowerShell and run: claude auth login"
+                )
             raise RuntimeError(err[-400:] or f"claude exited {returncode}")
     finally:
         if proc.poll() is None:
