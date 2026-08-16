@@ -5,6 +5,7 @@ import {
   getRecents,
   getState,
   postApprove,
+  postFileBrowse,
   postFolder,
   postFolderBrowse,
   postOpenEdit,
@@ -166,11 +167,24 @@ export default function App() {
             onKeyDown={(e) => {
               if (e.key === "Enter") void openPath(path);
             }}
-            placeholder="C:\path\to\footage"
-            aria-label="Folder path"
+            placeholder="Folder or C:\path\to\clip.mp4"
+            aria-label="Folder or video path"
           />
           <button type="button" disabled={busy} onClick={() => void openPath(path)}>
             Open
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const result = await postFileBrowse();
+                if (result?.cancelled) return;
+                applyPayload(result as ProjectPayload);
+              })
+            }
+          >
+            Add video
           </button>
           <button
             type="button"
@@ -183,9 +197,14 @@ export default function App() {
               })
             }
           >
-            Browse
+            Browse folder
           </button>
         </div>
+        <p className="hint">
+          Nothing uploads. The file stays on disk. Use <strong>Add video</strong> and pick the
+          .mp4 — a file dialog opens on this PC (it may sit behind the browser). Then click
+          Transcribe.
+        </p>
         <h2>Recents</h2>
         <ul>
           {shownRecents.map((p) => (

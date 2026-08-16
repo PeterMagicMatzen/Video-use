@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.server.claude import ensure_single_claude, stream_claude
-from app.server.inventory import find_videos, inventory
+from app.server.inventory import VIDEO_EXTS, find_videos, inventory
 from app.server.jobs import start_approve_and_preview, start_render, start_transcribe
 from app.server.paths import HELPERS
 from app.server.recents import add_recent, load_recents
@@ -40,6 +40,32 @@ def pick_folder_dialog() -> str | None:
     chosen = filedialog.askdirectory()
     root.destroy()
     return chosen or None
+
+
+def pick_video_dialog() -> str | None:
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.wm_attributes("-topmost", 1)
+    chosen = filedialog.askopenfilename(
+        title="Choose a video",
+        filetypes=[
+            ("Video", "*.mp4 *.mov *.mkv *.m4v *.webm *.avi"),
+            ("All files", "*.*"),
+        ],
+    )
+    root.destroy()
+    return chosen or None
+
+
+def resolve_footage_path(raw: str) -> Path:
+    """Folder, or a video file (use its parent folder)."""
+    text = raw.strip().strip('"').strip("'")
+    path = Path(text).expanduser()
+    if path.is_file() and path.suffix.lower() in VIDEO_EXTS:
+        return path.parent
+    return path
 
 
 app = FastAPI()
@@ -104,9 +130,12 @@ def project_payload(folder: Path | None = None) -> dict:
 
 def _open_folder(folder: Path) -> dict:
     global CURRENT_FOLDER
-    folder = folder.resolve()
+    folder = resolve_footage_path(str(folder)).resolve()
     if not folder.is_dir():
-        raise HTTPException(status_code=400, detail="folder not found")
+        raise HTTPException(
+            status_code=400,
+            detail="Not a footage folder. Open the folder that contains the .mp4, or pick the file itself.",
+        )
     (folder / "edit").mkdir(exist_ok=True)
     add_recent(folder)
     load_session(folder)
@@ -132,6 +161,14 @@ def post_folder(body: FolderBody) -> dict:
 @app.post("/api/folder/browse")
 def post_folder_browse() -> dict:
     chosen = pick_folder_dialog()
+    if not chosen:
+        return {"cancelled": True}
+    return _open_folder(Path(chosen))
+
+
+@app.post("/api/folder/browse-file")
+def post_folder_browse_file() -> dict:
+    chosen = pick_video_dialog()
     if not chosen:
         return {"cancelled": True}
     return _open_folder(Path(chosen))

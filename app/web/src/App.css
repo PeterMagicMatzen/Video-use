@@ -47,8 +47,16 @@ h1 {
 
 .folder-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+}
+
+.hint {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: #444;
+  line-height: 1.35;
 }
 
 .folder-row input {

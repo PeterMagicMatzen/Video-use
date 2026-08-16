@@ -29,6 +29,16 @@ def test_state_without_folder(client: TestClient):
     assert client.get("/api/state").status_code == 404
 
 
+def test_open_mp4_file_uses_parent_folder(client: TestClient, tmp_path: Path):
+    clip = tmp_path / "talk.mp4"
+    clip.write_bytes(b"x")
+    r = client.post("/api/folder", json={"path": str(clip)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["folder"] == str(tmp_path.resolve())
+    assert any(s["name"] == "talk.mp4" for s in body["sources"])
+
+
 def test_open_folder_lists_sources(client: TestClient, tmp_path: Path):
     (tmp_path / "take.mp4").write_bytes(b"x")
     r = client.post("/api/folder", json={"path": str(tmp_path)})
