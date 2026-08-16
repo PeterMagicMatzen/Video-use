@@ -65,6 +65,24 @@ command -v yt-dlp >/dev/null || brew install yt-dlp     # optional
 # sudo pacman -S ffmpeg yt-dlp
 ```
 
+### Windows
+
+```powershell
+# ffmpeg full build (has libass / subtitles)
+winget install Gyan.FFmpeg
+
+# Python extras for the local app
+cd $HOME\Developer\video-use
+pip install -e ".[app,dev]"
+
+# Skill junction (already present on this machine; recreate if needed)
+New-Item -ItemType Junction -Path "$HOME\.claude\skills\video-use" -Target "$HOME\Developer\video-use" -Force
+
+# Launch the local app
+powershell -File app\scripts\dev.ps1
+# UI: http://localhost:5173   API: http://127.0.0.1:8787
+```
+
 If `brew` / `apt` / `pacman` requires a sudo prompt, tell the user the exact command and wait. Do not invent a password.
 
 ### 4. Register the skill with the current agent

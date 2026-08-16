@@ -68,6 +68,13 @@ cp .env.example .env
 $EDITOR .env                    # ELEVENLABS_API_KEY=...
 ```
 
+### Local app (Windows)
+
+Windows users can run the local app via `app/scripts/dev.ps1` after
+`pip install -e ".[app]"`. See `install.md` for full Windows setup
+(ffmpeg via winget, skill junction, and launch).
+
+
 ## How it works
 
 The LLM never watches the video. It **reads** it — through two layers that together give it everything it needs to cut with word-boundary precision.
