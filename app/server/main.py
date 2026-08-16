@@ -233,6 +233,33 @@ def post_bin_add(body: BinKindBody) -> dict:
     return project_payload(folder)
 
 
+@app.get("/api/library/sfx")
+def get_library_sfx() -> dict:
+    if str(HELPERS) not in sys.path:
+        sys.path.insert(0, str(HELPERS))
+    from sfx_library import load_catalog
+    return load_catalog()
+
+
+class LibraryAddBody(BaseModel):
+    file: str
+    kind: str = "voice"
+
+
+@app.post("/api/library/sfx/add")
+def post_library_sfx_add(body: LibraryAddBody) -> dict:
+    folder = _require_open_folder()
+    if str(HELPERS) not in sys.path:
+        sys.path.insert(0, str(HELPERS))
+    from media_bin import add_item
+    src = Path(body.file)
+    try:
+        add_item(folder / "edit", "sfx", src)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return project_payload(folder)
+
+
 @app.post("/api/bin/remove")
 def post_bin_remove(body: BinRemoveBody) -> dict:
     folder = _require_open_folder()

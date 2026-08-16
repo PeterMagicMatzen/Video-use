@@ -56,6 +56,22 @@ export async function postBinAdd(kind: "broll" | "graphic" | "voice") {
   return r.json();
 }
 
+export async function getSfxLibrary() {
+  const r = await fetch(`${API}/api/library/sfx`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function postLibrarySfxAdd(file: string) {
+  const r = await fetch(`${API}/api/library/sfx/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file, kind: "voice" }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function postBinRemove(file: string) {
   const r = await fetch(`${API}/api/bin/remove`, {
     method: "POST",

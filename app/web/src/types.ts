@@ -77,6 +77,13 @@ export type ProjectPayload = {
   bin?: BinItem[];
 };
 
+export type SfxItem = {
+  id?: string;
+  title: string;
+  tags?: string[];
+  file: string;
+};
+
 export type BinItem = {
   kind: string;
   file: string;

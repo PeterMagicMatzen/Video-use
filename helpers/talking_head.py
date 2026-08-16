@@ -141,7 +141,7 @@ def build_talking_head_edl(*, folder: Path, edit_dir: Path) -> dict:
     )
     sources = {t["name"]: str(t["path"].resolve()) for t in takes}
     extras = load_bin(edit_dir)
-    ranges, overlays, sources = apply_bin(ranges, overlays, sources, extras, edit_dir)
+    ranges, overlays, sources, audio_overlays = apply_bin(ranges, overlays, sources, extras, edit_dir)
     total = round(sum(r["end"] - r["start"] for r in ranges), 3)
     return {
         "version": 1,
@@ -149,6 +149,7 @@ def build_talking_head_edl(*, folder: Path, edit_dir: Path) -> dict:
         "ranges": ranges,
         "grade": "cinematic",
         "overlays": overlays,
+        "audio_overlays": audio_overlays,
         "subtitles": "master.srt",
         "total_duration_s": total,
     }
@@ -160,14 +161,15 @@ def apply_bin(
     sources: dict,
     extras: list[dict],
     edit_dir: Path,
-) -> tuple[list[dict], list[dict], dict]:
-    """Fold user B-roll into the timeline and graphics/voice onto overlays."""
+) -> tuple[list[dict], list[dict], dict, list[dict]]:
+    """Fold user B-roll into the timeline and graphics/SFX onto the mix."""
     from graphics import _save_clip
     from media_bin import AUDIO_EXTS, IMAGE_EXTS
 
     talk = list(ranges)
+    audio_overlays: list[dict] = []
     inserted = 0
-    t_cursor = 4.5
+    t_cursor = 0.12
     for item in extras:
         kind = item.get("kind")
         raw = Path(str(item.get("file") or ""))
@@ -197,6 +199,15 @@ def apply_bin(
                 "duration": min(dur, 2.8),
             })
             t_cursor += 3.0
+        elif kind == "sfx" or (kind == "voice" and raw.suffix.lower() in AUDIO_EXTS):
+            name = raw.name.lower()
+            start = 0.08 if any(k in name for k in ("whoosh", "swoosh", "intro", "impact", "hit")) else t_cursor
+            audio_overlays.append({
+                "file": str(raw.resolve()),
+                "start_in_output": round(start, 2),
+                "duration": min(dur, 6.0),
+            })
+            t_cursor = max(t_cursor, start) + 2.2
         elif kind == "voice":
             wrapped = _wrap_voice(raw, edit_dir / "bin" / "voice" / f"{raw.stem}.mp4", dur)
             key = f"voice_{raw.stem}"
@@ -211,7 +222,7 @@ def apply_bin(
             })
             inserted += 1
             _ = AUDIO_EXTS
-    return talk, overlays, sources
+    return talk, overlays, sources, audio_overlays
 
 
 def _wrap_voice(src: Path, dest: Path, duration: float) -> Path:

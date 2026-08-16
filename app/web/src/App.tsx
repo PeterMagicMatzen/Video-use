@@ -3,6 +3,7 @@ import {
   API,
   getDoctor,
   getRecents,
+  getSfxLibrary,
   getState,
   postApprove,
   postAutoEdit,
@@ -10,6 +11,7 @@ import {
   postBinRemove,
   postClearRecents,
   postCloseProject,
+  postLibrarySfxAdd,
   postFileBrowse,
   postFolder,
   postFolderBrowse,
@@ -23,7 +25,7 @@ import {
 } from "./api";
 import { canApprove, canAutoEdit, canChat, canRenderFinal, canTranscribe } from "./buttons";
 import { headlineFor, stepIndex } from "./status";
-import type { Doctor, ProjectPayload } from "./types";
+import type { Doctor, ProjectPayload, SfxItem } from "./types";
 import "./App.css";
 
 type ChatLine = { role: "user" | "assistant"; text: string };
@@ -59,6 +61,8 @@ export default function App() {
   const [chatRetry, setChatRetry] = useState(false);
   const [watch, setWatch] = useState<WatchMode>("cut");
   const [moreOpen, setMoreOpen] = useState(false);
+  const [sfx, setSfx] = useState<SfxItem[]>([]);
+  const [sfxQuery, setSfxQuery] = useState("");
 
   const applyPayload = useCallback((next: ProjectPayload) => {
     setPayload(next);
@@ -81,6 +85,9 @@ export default function App() {
 
   useEffect(() => {
     refresh().catch((err: unknown) => setActionError(errText(err)));
+    getSfxLibrary()
+      .then((data) => setSfx(Array.isArray(data.items) ? data.items : []))
+      .catch(() => setSfx([]));
   }, [refresh]);
 
   const jobKind = payload?.job?.kind ?? "idle";
@@ -323,6 +330,44 @@ export default function App() {
           ) : (
             <p className="muted">{payload ? "Nothing added yet." : "Open a clip first."}</p>
           )}
+
+          <p className="eyebrow">Mixkit SFX library</p>
+          <p className="muted">Free Mixkit effects. Add one, then run Make professional edit.</p>
+          <input
+            value={sfxQuery}
+            onChange={(e) => setSfxQuery(e.target.value)}
+            placeholder="Search whoosh, applause, hit…"
+            aria-label="Search sound library"
+          />
+          <ul className="bin sfx-list">
+            {sfx
+              .filter((item) => {
+                const q = sfxQuery.trim().toLowerCase();
+                if (!q) return true;
+                return (
+                  item.title.toLowerCase().includes(q) ||
+                  (item.tags || []).some((t) => t.toLowerCase().includes(q))
+                );
+              })
+              .slice(0, 40)
+              .map((item) => (
+                <li key={item.file}>
+                  <span>{item.title}</span>
+                  <button
+                    type="button"
+                    disabled={working || !payload}
+                    onClick={() =>
+                      void run(async () => {
+                        applyPayload((await postLibrarySfxAdd(item.file)) as ProjectPayload);
+                      })
+                    }
+                  >
+                    Add
+                  </button>
+                </li>
+              ))}
+          </ul>
+          {sfx.length === 0 ? <p className="muted">Library empty — run scripts/download_mixkit_sfx.py</p> : null}
 
           {shownRecents.length > 0 ? (
             <>

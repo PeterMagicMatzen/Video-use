@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-KINDS = ("broll", "graphic", "voice")
+KINDS = ("broll", "graphic", "voice", "sfx")
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}

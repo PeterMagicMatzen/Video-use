@@ -41,6 +41,6 @@ def test_apply_bin_inserts_broll(tmp_path):
     ranges = [{"source": "a", "start": 0.0, "end": 2.0, "beat": "HOOK"}]
     sources = {"a": "a.mp4"}
     extras = [{"kind": "broll", "file": str(broll), "duration": 2.5, "label": "street.mp4"}]
-    out_ranges, _ov, out_src = apply_bin(ranges, [], sources, extras, tmp_path)
+    out_ranges, _ov, out_src, _audio = apply_bin(ranges, [], sources, extras, tmp_path)
     assert any(r["beat"] == "BROLL" for r in out_ranges)
     assert "broll_street" in out_src

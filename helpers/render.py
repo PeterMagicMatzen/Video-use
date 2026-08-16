@@ -436,6 +436,40 @@ def measure_loudness(video_path: Path) -> dict[str, str] | None:
     return data
 
 
+def mix_audio_overlays(video: Path, overlays: list, edit_dir: Path) -> None:
+    """Mix timed SFX under the program audio. No-op if overlays empty."""
+    usable = []
+    for ov in overlays:
+        p = resolve_path(str(ov.get("file") or ""), edit_dir)
+        if p.is_file():
+            usable.append((p, float(ov.get("start_in_output") or 0.0)))
+    if not usable:
+        return
+    inputs = ["-i", str(video)]
+    filters = []
+    mix_in = ["[0:a]"]
+    for i, (path, start) in enumerate(usable, start=1):
+        inputs += ["-i", str(path)]
+        ms = max(0, int(start * 1000))
+        filters.append(f"[{i}:a]adelay={ms}|{ms},volume=0.85[s{i}]")
+        mix_in.append(f"[s{i}]")
+    n = 1 + len(usable)
+    filters.append(f"{''.join(mix_in)}amix=inputs={n}:duration=first:dropout_transition=0:normalize=0[aout]")
+    mixed = video.with_suffix(".sfxmix.mp4")
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", ";".join(filters),
+        "-map", "0:v", "-map", "[aout]",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
+        str(mixed),
+    ]
+    print(f"mixing {len(usable)} sfx under program audio")
+    run_ffmpeg(cmd)
+    mixed.replace(video)
+
+
 def apply_loudnorm_two_pass(
     input_path: Path,
     output_path: Path,
@@ -670,6 +704,8 @@ def main() -> None:
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)
+
+    mix_audio_overlays(out_path, edl.get("audio_overlays") or [], edit_dir)
 
     size_mb = out_path.stat().st_size / (1024 * 1024)
     print(f"\ndone: {out_path} ({size_mb:.1f} MB)")

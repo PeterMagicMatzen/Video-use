@@ -58,3 +58,7 @@ master.srt
 takes_packed.md
 edl.json
 project.md
+
+# Mixkit SFX binaries (catalog.json is tracked)
+library/sfx/*.mp3
+library/sfx/*.wav
