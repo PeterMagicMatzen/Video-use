@@ -1,3 +1,4 @@
+# If Restricted policy blocks this script: powershell -ExecutionPolicy Bypass -File app\scripts\dev.ps1
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $root

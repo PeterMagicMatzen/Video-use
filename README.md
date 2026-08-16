@@ -70,9 +70,13 @@ $EDITOR .env                    # ELEVENLABS_API_KEY=...
 
 ### Local app (Windows)
 
-Windows users can run the local app via `app/scripts/dev.ps1` after
-`pip install -e ".[app]"`. See `install.md` for full Windows setup
-(ffmpeg via winget, skill junction, and launch).
+Windows users can run the local app after `pip install -e ".[app]"`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File app\scripts\dev.ps1
+```
+
+See `install.md` for full Windows setup (ffmpeg via winget, skill junction, and launch).
 
 
 ## How it works

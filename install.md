@@ -78,8 +78,8 @@ pip install -e ".[app,dev]"
 # Skill junction (already present on this machine; recreate if needed)
 New-Item -ItemType Junction -Path "$HOME\.claude\skills\video-use" -Target "$HOME\Developer\video-use" -Force
 
-# Launch the local app
-powershell -File app\scripts\dev.ps1
+# Launch the local app (-ExecutionPolicy Bypass for Restricted machines)
+powershell -ExecutionPolicy Bypass -File app\scripts\dev.ps1
 # UI: http://localhost:5173   API: http://127.0.0.1:8787
 ```
 
