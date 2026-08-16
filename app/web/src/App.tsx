@@ -133,10 +133,16 @@ export default function App() {
     setBusy(true);
     try {
       await fn(makeAppender());
-      await refresh();
     } catch (err) {
       setChatNotice(errText(err));
       setChatRetry(true);
+      setBusy(false);
+      return;
+    }
+    try {
+      await refresh();
+    } catch (err) {
+      setActionError(errText(err));
     } finally {
       setBusy(false);
     }
