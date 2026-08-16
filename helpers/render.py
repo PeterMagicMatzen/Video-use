@@ -61,6 +61,17 @@ def run(cmd: list[str], quiet: bool = False) -> None:
     subprocess.run(cmd, check=True)
 
 
+def run_ffmpeg(cmd: list[str]) -> None:
+    """Run ffmpeg with stderr captured; print it on failure so helpers see it."""
+    proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        raw = proc.stderr or b""
+        err = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else raw
+        if err:
+            print(err, file=sys.stderr, end="" if err.endswith("\n") else "\n")
+        raise subprocess.CalledProcessError(proc.returncode, cmd, stderr=err)
+
+
 def resolve_grade_filter(grade_field: str | None) -> str:
     """The EDL's 'grade' field can be a preset name, a raw ffmpeg filter, or 'auto'.
 
@@ -205,7 +216,7 @@ def extract_segment(
         "-movflags", "+faststart",
         str(out_path),
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run_ffmpeg(cmd)
 
 
 def extract_all_segments(
@@ -276,7 +287,7 @@ def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -
         str(out_path),
     ]
     print(f"concat → {out_path.name}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run_ffmpeg(cmd)
     concat_list.unlink(missing_ok=True)
 
 
@@ -451,7 +462,7 @@ def apply_loudnorm_two_pass(
             str(output_path),
         ]
         print(f"  loudnorm (1-pass preview) → {output_path.name}")
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        run_ffmpeg(cmd)
         return True
 
     # Full two-pass
@@ -483,7 +494,7 @@ def apply_loudnorm_two_pass(
         str(output_path),
     ]
     print(f"  loudnorm pass 2: normalizing → {output_path.name}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run_ffmpeg(cmd)
     return True
 
 
@@ -564,7 +575,7 @@ def build_final_composite(
     ]
     print(f"compositing → {out_path.name}")
     print(f"  overlays: {len(overlays)}, subtitles: {'yes' if has_subs else 'no'}")
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    run_ffmpeg(cmd)
 
 
 # -------- Main ---------------------------------------------------------------

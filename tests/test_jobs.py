@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -30,3 +33,50 @@ def test_start_render_rejects_invalid_edl(tmp_path: Path, monkeypatch):
     with pytest.raises(RuntimeError, match="invalid"):
         start_render(tmp_path, preview=True)
     assert called["n"] == 0
+
+
+def test_failed_preview_render_keeps_last_good_file(tmp_path: Path, monkeypatch):
+    src = tmp_path / "a.mp4"
+    src.write_bytes(b"x")
+    edit = tmp_path / "edit"
+    edit.mkdir()
+    edl = {
+        "version": 1,
+        "sources": {"A": str(src)},
+        "ranges": [{"source": "A", "start": 0, "end": 1.0, "beat": "HOOK", "quote": "x", "reason": "y"}],
+        "grade": "none",
+        "overlays": [],
+        "total_duration_s": 1.0,
+    }
+    (edit / "edl.json").write_text(json.dumps(edl), encoding="utf-8")
+    preview = edit / "preview.mp4"
+    original = b"LAST-GOOD-PREVIEW"
+    preview.write_bytes(original)
+    save_session(tmp_path, default_session(tmp_path))
+
+    def fake_run_helper(script, args, *, cwd=None):
+        o_idx = args.index("-o")
+        out = Path(cwd or ".") / args[o_idx + 1]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"TRUNCATED-GARBAGE")
+        return subprocess.CompletedProcess(
+            args=["python", script, *args],
+            returncode=1,
+            stdout="",
+            stderr="ffmpeg exploded\n" + "\n".join(f"line {i}" for i in range(50)),
+        )
+
+    from app.server import proc as proc_mod
+    monkeypatch.setattr(proc_mod, "run_helper", fake_run_helper)
+    start_render(tmp_path, preview=True)
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        s = load_session(tmp_path)
+        if (s.get("job") or {}).get("kind") in (None, "idle"):
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("render job did not become idle")
+
+    assert preview.read_bytes() == original

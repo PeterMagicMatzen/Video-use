@@ -124,7 +124,11 @@ def start_render(folder: Path, *, preview: bool) -> dict:
         raise RuntimeError("invalid EDL: " + "\n".join(result.errors))
 
     out_name = "preview.mp4" if preview else "final.mp4"
+    # Preview writes a sibling then os.replace so a failed refresh cannot
+    # truncate the last good preview.mp4. Final still writes in place.
+    render_name = "preview.rendering.mp4" if preview else out_name
     out = edit_dir / out_name
+    staging = edit_dir / render_name
     log = edit_dir / "render.log"
     session["last_error"] = None
     session["job"] = {
@@ -139,7 +143,7 @@ def start_render(folder: Path, *, preview: bool) -> dict:
     def work():
         s = load_session(folder)
         try:
-            args = ["edit/edl.json", "-o", f"edit/{out_name}"]
+            args = ["edit/edl.json", "-o", f"edit/{render_name}"]
             if preview:
                 args.append("--preview")
             if should_build_subtitles(edl, edit_dir):
@@ -154,6 +158,8 @@ def start_render(folder: Path, *, preview: bool) -> dict:
                     output=batch.stdout,
                     stderr=err,
                 )
+            if preview:
+                os.replace(staging, out)
             s = load_session(folder)
             s["last_error"] = None
         except subprocess.CalledProcessError as exc:
