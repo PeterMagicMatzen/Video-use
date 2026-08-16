@@ -15,7 +15,7 @@ from app.server.claude import ensure_single_claude, stream_claude
 from app.server.inventory import VIDEO_EXTS, find_videos, inventory
 from app.server.jobs import start_approve_and_preview, start_auto_edit, start_render, start_transcribe
 from app.server.paths import HELPERS
-from app.server.recents import add_recent, load_recents
+from app.server.recents import add_recent, load_recents, clear_recents
 from app.server.session import load_session, save_session, session_path
 from app.server.state import derive_center_state
 
@@ -64,23 +64,12 @@ def resolve_footage_path(raw: str) -> Path:
     text = raw.strip().strip('"').strip("'")
     path = Path(text).expanduser()
     if path.is_file() and path.suffix.lower() in VIDEO_EXTS:
-        return path.parent
+        from app.server.projects import isolate_clip
+        return isolate_clip(path)
     return path
 
 
-def restore_last_folder() -> None:
-    recents = load_recents()
-    if not recents:
-        return
-    path = Path(recents[0])
-    if path.is_dir():
-        try:
-            _open_folder(path)
-        except HTTPException:
-            return
-
-
-app = FastAPI(on_startup=[restore_last_folder])
+app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -138,9 +127,17 @@ def project_payload(folder: Path | None = None) -> dict:
             c.get("name") == "claude_login" and c.get("ok") for c in doctor.get("checks", [])
         ),
         "auto_edit_enabled": packed_exists,
+        "bin": _load_bin(folder),
         "job": session["job"],
         "stale": center_state == "stale",
     }
+
+
+def _load_bin(folder: Path) -> list[dict]:
+    if str(HELPERS) not in sys.path:
+        sys.path.insert(0, str(HELPERS))
+    from media_bin import load_bin
+    return load_bin(folder / "edit")
 
 
 def _open_folder(folder: Path) -> dict:
@@ -179,6 +176,71 @@ def post_folder_browse() -> dict:
     if not chosen:
         return {"cancelled": True}
     return _open_folder(Path(chosen))
+
+
+@app.post("/api/folder/close")
+def post_folder_close() -> dict:
+    reset_current_folder()
+    return {"ok": True}
+
+
+@app.post("/api/recents/clear")
+def post_recents_clear() -> dict:
+    clear_recents()
+    return {"recents": []}
+
+
+class BinKindBody(BaseModel):
+    kind: str
+
+
+class BinRemoveBody(BaseModel):
+    file: str
+
+
+def pick_media_dialog(kind: str) -> str | None:
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.wm_attributes("-topmost", 1)
+    types = {
+        "broll": [("B-roll video", "*.mp4 *.mov *.mkv *.webm *.avi *.m4v")],
+        "graphic": [("Graphic", "*.png *.jpg *.jpeg *.webp *.mp4 *.mov")],
+        "voice": [("Voice / audio", "*.mp3 *.wav *.m4a *.aac *.ogg *.mp4 *.mov")],
+    }
+    chosen = filedialog.askopenfilename(
+        title=f"Add {kind}",
+        filetypes=types.get(kind, [("All files", "*.*")]) + [("All files", "*.*")],
+    )
+    root.destroy()
+    return chosen or None
+
+
+@app.post("/api/bin/add")
+def post_bin_add(body: BinKindBody) -> dict:
+    folder = _require_open_folder()
+    chosen = pick_media_dialog(body.kind)
+    if not chosen:
+        return {"cancelled": True, "bin": _load_bin(folder)}
+    if str(HELPERS) not in sys.path:
+        sys.path.insert(0, str(HELPERS))
+    from media_bin import add_item
+    try:
+        add_item(folder / "edit", body.kind, Path(chosen))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return project_payload(folder)
+
+
+@app.post("/api/bin/remove")
+def post_bin_remove(body: BinRemoveBody) -> dict:
+    folder = _require_open_folder()
+    if str(HELPERS) not in sys.path:
+        sys.path.insert(0, str(HELPERS))
+    from media_bin import remove_item
+    remove_item(folder / "edit", body.file)
+    return project_payload(folder)
 
 
 @app.post("/api/folder/browse-file")

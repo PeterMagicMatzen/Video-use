@@ -16,6 +16,11 @@ def load_recents() -> list[str]:
     return [str(p) for p in data] if isinstance(data, list) else []
 
 
+def clear_recents() -> None:
+    if RECENTS_PATH.exists():
+        RECENTS_PATH.write_text("[]", encoding="utf-8")
+
+
 def add_recent(folder: Path) -> list[str]:
     resolved = str(folder.resolve())
     items = [resolved, *[p for p in load_recents() if p != resolved]]

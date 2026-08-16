@@ -6,6 +6,10 @@ import {
   getState,
   postApprove,
   postAutoEdit,
+  postBinAdd,
+  postBinRemove,
+  postClearRecents,
+  postCloseProject,
   postFileBrowse,
   postFolder,
   postFolderBrowse,
@@ -257,6 +261,69 @@ export default function App() {
             <p className="muted">No clip open yet.</p>
           )}
 
+          {payload ? (
+            <button
+              type="button"
+              className="ghost"
+              disabled={working}
+              onClick={() =>
+                void run(async () => {
+                  await postCloseProject();
+                  setPayload(null);
+                  setPath("");
+                  setChatLog([]);
+                })
+              }
+            >
+              New project
+            </button>
+          ) : null}
+
+          <p className="eyebrow">Add-ins</p>
+          <p className="muted">B-roll, graphics, and voice clips you pick. They land in the next professional edit.</p>
+          <div className="bin-actions">
+            {(["broll", "graphic", "voice"] as const).map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                disabled={working || !payload}
+                onClick={() =>
+                  void run(async () => {
+                    const result = await postBinAdd(kind);
+                    if (result?.cancelled) return;
+                    applyPayload(result as ProjectPayload);
+                  })
+                }
+              >
+                {kind === "broll" ? "Add B-roll" : kind === "graphic" ? "Add graphic" : "Add voice clip"}
+              </button>
+            ))}
+          </div>
+          {(payload?.bin ?? []).length > 0 ? (
+            <ul className="bin">
+              {(payload?.bin ?? []).map((item) => (
+                <li key={item.file}>
+                  <span>
+                    {item.kind} · {item.label || item.file}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={working}
+                    onClick={() =>
+                      void run(async () => {
+                        applyPayload((await postBinRemove(item.file)) as ProjectPayload);
+                      })
+                    }
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">{payload ? "Nothing added yet." : "Open a clip first."}</p>
+          )}
+
           {shownRecents.length > 0 ? (
             <>
               <p className="eyebrow">Recent</p>
@@ -269,6 +336,19 @@ export default function App() {
                   </li>
                 ))}
               </ul>
+              <button
+                type="button"
+                className="ghost"
+                disabled={working}
+                onClick={() =>
+                  void run(async () => {
+                    await postClearRecents();
+                    setRecents([]);
+                  })
+                }
+              >
+                Clear recents
+              </button>
             </>
           ) : null}
         </aside>

@@ -8,9 +8,10 @@ VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}
 
 
 def find_videos(folder: Path) -> list[Path]:
+    from app.server.projects import is_edit_artifact
     return sorted(
         p for p in folder.iterdir()
-        if p.is_file() and p.suffix.lower() in VIDEO_EXTS
+        if p.is_file() and p.suffix.lower() in VIDEO_EXTS and not is_edit_artifact(p)
     )
 
 

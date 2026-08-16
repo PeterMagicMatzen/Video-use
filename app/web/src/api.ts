@@ -36,6 +36,36 @@ export async function postFolderBrowse() {
   return r.json();
 }
 
+export async function postCloseProject() {
+  const r = await fetch(`${API}/api/folder/close`, { method: "POST" });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function postClearRecents() {
+  const r = await fetch(`${API}/api/recents/clear`, { method: "POST" });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function postBinAdd(kind: "broll" | "graphic" | "voice") {
+  const r = await fetch(`${API}/api/bin/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function postBinRemove(file: string) {
+  const r = await fetch(`${API}/api/bin/remove`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function postFileBrowse() {
   const r = await fetch(`${API}/api/folder/browse-file`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());

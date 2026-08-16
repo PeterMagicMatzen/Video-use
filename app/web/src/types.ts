@@ -73,4 +73,13 @@ export type ProjectPayload = {
   chat_enabled: boolean;
   job: Job;
   stale: boolean;
+  auto_edit_enabled?: boolean;
+  bin?: BinItem[];
+};
+
+export type BinItem = {
+  kind: string;
+  file: string;
+  label?: string;
+  duration?: number;
 };

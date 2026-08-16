@@ -27,6 +27,8 @@ def load_takes(edit_dir: Path, folder: Path) -> list[dict]:
     videos = {}
     for p in folder.iterdir():
         if p.is_file() and p.suffix.lower() in {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".avi"}:
+            if p.name.endswith("-EDIT.mp4") or p.name in {"preview.mp4", "final.mp4"}:
+                continue
             videos[p.stem] = p
 
     takes = []
@@ -129,6 +131,7 @@ def build_talking_head_edl(*, folder: Path, edit_dir: Path) -> dict:
     keys = keyword_lines(phrases)
 
     from graphics import build_talking_head_graphics
+    from media_bin import load_bin
     overlays = build_talking_head_graphics(
         edit_dir=edit_dir,
         speaker=name,
@@ -136,8 +139,9 @@ def build_talking_head_edl(*, folder: Path, edit_dir: Path) -> dict:
         keywords=keys,
         output_duration=sum(r["end"] - r["start"] for r in ranges),
     )
-
     sources = {t["name"]: str(t["path"].resolve()) for t in takes}
+    extras = load_bin(edit_dir)
+    ranges, overlays, sources = apply_bin(ranges, overlays, sources, extras, edit_dir)
     total = round(sum(r["end"] - r["start"] for r in ranges), 3)
     return {
         "version": 1,
@@ -148,3 +152,82 @@ def build_talking_head_edl(*, folder: Path, edit_dir: Path) -> dict:
         "subtitles": "master.srt",
         "total_duration_s": total,
     }
+
+
+def apply_bin(
+    ranges: list[dict],
+    overlays: list[dict],
+    sources: dict,
+    extras: list[dict],
+    edit_dir: Path,
+) -> tuple[list[dict], list[dict], dict]:
+    """Fold user B-roll into the timeline and graphics/voice onto overlays."""
+    from graphics import _save_clip
+    from media_bin import AUDIO_EXTS, IMAGE_EXTS
+
+    talk = list(ranges)
+    inserted = 0
+    t_cursor = 4.5
+    for item in extras:
+        kind = item.get("kind")
+        raw = Path(str(item.get("file") or ""))
+        if not raw.is_file():
+            continue
+        dur = float(item.get("duration") or 2.0)
+        if kind == "broll":
+            key = f"broll_{raw.stem}"
+            sources[key] = str(raw.resolve())
+            cut_dur = min(dur, 3.2)
+            talk.insert(min(1 + inserted, len(talk)), {
+                "source": key,
+                "start": 0.0,
+                "end": round(cut_dur, 3),
+                "beat": "BROLL",
+                "quote": item.get("label") or raw.name,
+                "reason": "User B-roll cutaway",
+            })
+            inserted += 1
+        elif kind == "graphic":
+            clip = raw
+            if raw.suffix.lower() in IMAGE_EXTS:
+                clip = _save_clip(raw, edit_dir / "bin" / "graphic" / f"{raw.stem}.mov", min(dur, 2.8))
+            overlays.append({
+                "file": str(clip),
+                "start_in_output": round(t_cursor, 2),
+                "duration": min(dur, 2.8),
+            })
+            t_cursor += 3.0
+        elif kind == "voice":
+            wrapped = _wrap_voice(raw, edit_dir / "bin" / "voice" / f"{raw.stem}.mp4", dur)
+            key = f"voice_{raw.stem}"
+            sources[key] = str(wrapped.resolve())
+            talk.insert(min(1 + inserted, len(talk)), {
+                "source": key,
+                "start": 0.0,
+                "end": round(min(dur, 8.0), 3),
+                "beat": "VO",
+                "quote": item.get("label") or "voice clip",
+                "reason": "User voice / viral hook clip",
+            })
+            inserted += 1
+            _ = AUDIO_EXTS
+    return talk, overlays, sources
+
+
+def _wrap_voice(src: Path, dest: Path, duration: float) -> Path:
+    import subprocess
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if src.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv", ".m4v"}:
+        return src
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"color=c=0x111111:s=1080x1920:d={max(duration, 0.8):.2f}",
+        "-i", str(src),
+        "-shortest",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        str(dest),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return dest
+

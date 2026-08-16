@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from talking_head import build_ranges, guess_name, hook_line, is_keeper
+from talking_head import apply_bin, build_ranges, guess_name, hook_line, is_keeper
 
 
 def test_drops_fillers_and_weak_tails():
@@ -33,3 +33,14 @@ def test_build_ranges_pads_keepers_only():
     assert ranges[0]["start"] == 0.95
     assert ranges[0]["end"] == 2.08
     assert ranges[0]["source"] == "take1"
+
+
+def test_apply_bin_inserts_broll(tmp_path):
+    broll = tmp_path / "street.mp4"
+    broll.write_bytes(b"x")
+    ranges = [{"source": "a", "start": 0.0, "end": 2.0, "beat": "HOOK"}]
+    sources = {"a": "a.mp4"}
+    extras = [{"kind": "broll", "file": str(broll), "duration": 2.5, "label": "street.mp4"}]
+    out_ranges, _ov, out_src = apply_bin(ranges, [], sources, extras, tmp_path)
+    assert any(r["beat"] == "BROLL" for r in out_ranges)
+    assert "broll_street" in out_src
