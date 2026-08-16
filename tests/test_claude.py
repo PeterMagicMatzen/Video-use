@@ -15,6 +15,8 @@ def test_first_turn_has_no_resume(tmp_path: Path):
     assert "--continue" not in cmd
     assert "--resume" not in cmd
     assert "--dangerously-skip-permissions" not in cmd
+    assert "--permission-mode" in cmd
+    assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
     assert "--output-format" in cmd
     assert "stream-json" in cmd
     assert "--allowedTools" in cmd

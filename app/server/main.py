@@ -74,6 +74,9 @@ def project_payload(folder: Path | None = None) -> dict:
     edl_path = folder / "edit" / "edl.json"
     packed_exists = packed_path.is_file()
     packed_markdown = packed_path.read_text(encoding="utf-8") if packed_exists else None
+    preview_path = folder / "edit" / "preview.mp4"
+    has_preview = preview_path.is_file()
+    preview_mtime = preview_path.stat().st_mtime if has_preview else None
     edl = None
     if edl_path.is_file():
         try:
@@ -90,7 +93,8 @@ def project_payload(folder: Path | None = None) -> dict:
         "error": session.get("last_error"),
         "packed_markdown": packed_markdown,
         "edl": edl,
-        "has_preview": (folder / "edit" / "preview.mp4").is_file(),
+        "has_preview": has_preview,
+        "preview_mtime": preview_mtime,
         "has_final": (folder / "edit" / "final.mp4").is_file(),
         "chat_enabled": packed_exists and bool(doctor.get("ok")),
         "job": session["job"],
@@ -236,6 +240,7 @@ def _stream_chat_turn(folder: Path, session: dict, prompt: str):
             session["last_error"] = None
         except Exception as exc:
             session["last_error"] = str(exc)
+            yield _sse({"error": str(exc)})
         finally:
             session["job"] = _idle_job()
             save_session(folder, session)

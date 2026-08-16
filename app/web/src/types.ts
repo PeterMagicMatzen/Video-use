@@ -68,6 +68,7 @@ export type ProjectPayload = {
   packed_markdown: string | null;
   edl: Edl | null;
   has_preview: boolean;
+  preview_mtime: number | null;
   has_final: boolean;
   chat_enabled: boolean;
   job: Job;

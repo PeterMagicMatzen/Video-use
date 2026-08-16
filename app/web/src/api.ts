@@ -66,49 +66,41 @@ export async function postReject(note: string) {
   if (!r.ok) throw new Error(await r.text());
 }
 
+export function applySseEvent(ev: { text?: string; error?: string }, onText: (t: string) => void) {
+  if (ev.error) throw new Error(ev.error);
+  if (ev.text) onText(ev.text);
+}
+
+async function readSseChat(r: Response, onText: (t: string) => void) {
+  if (!r.ok || !r.body) throw new Error(await r.text());
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop() || "";
+    for (const part of parts) {
+      const line = part.replace(/^data:\s*/, "");
+      if (!line) continue;
+      applySseEvent(JSON.parse(line), onText);
+    }
+  }
+}
+
 export async function streamChat(message: string, onText: (t: string) => void) {
   const r = await fetch(`${API}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
   });
-  if (!r.ok || !r.body) throw new Error(await r.text());
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const parts = buf.split("\n\n");
-    buf = parts.pop() || "";
-    for (const part of parts) {
-      const line = part.replace(/^data:\s*/, "");
-      if (!line) continue;
-      const ev = JSON.parse(line);
-      if (ev.text) onText(ev.text);
-    }
-  }
+  await readSseChat(r, onText);
 }
 
 /** Same SSE reader loop as streamChat, against POST /api/chat/retry. */
 export async function retryChat(onText: (t: string) => void) {
   const r = await fetch(`${API}/api/chat/retry`, { method: "POST" });
-  if (!r.ok || !r.body) throw new Error(await r.text());
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const parts = buf.split("\n\n");
-    buf = parts.pop() || "";
-    for (const part of parts) {
-      const line = part.replace(/^data:\s*/, "");
-      if (!line) continue;
-      const ev = JSON.parse(line);
-      if (ev.text) onText(ev.text);
-    }
-  }
+  await readSseChat(r, onText);
 }

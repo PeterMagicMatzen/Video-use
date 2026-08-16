@@ -35,6 +35,8 @@ def claude_cmd(*, folder: Path, session_id: str | None, prompt: str) -> list[str
         "-p",
         "--output-format",
         "stream-json",
+        "--permission-mode",
+        "acceptEdits",
         "--append-system-prompt",
         EDITOR_BRIEF,
         "--allowedTools",

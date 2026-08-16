@@ -85,3 +85,33 @@ def test_approve_route_exists(client: TestClient, tmp_path: Path, monkeypatch):
     monkeypatch.setattr(main_mod, "start_approve_and_preview", lambda folder: {"accepted": True})
     r = client.post("/api/approve")
     assert r.status_code == 202
+
+
+def test_preview_mtime_in_state(client: TestClient, tmp_path: Path):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    assert client.get("/api/state").json()["preview_mtime"] is None
+    (tmp_path / "edit" / "preview.mp4").write_bytes(b"mp4")
+    body = client.get("/api/state").json()
+    assert body["has_preview"] is True
+    assert isinstance(body["preview_mtime"], (int, float))
+    assert body["preview_mtime"] > 0
+
+
+def test_chat_sse_error_event_on_failure(client: TestClient, tmp_path: Path, monkeypatch):
+    (tmp_path / "take.mp4").write_bytes(b"x")
+    (tmp_path / "edit").mkdir(exist_ok=True)
+    (tmp_path / "edit" / "takes_packed.md").write_text("x", encoding="utf-8")
+    client.post("/api/folder", json={"path": str(tmp_path)})
+    import app.server.main as main_mod
+
+    def boom(*_a, **_k):
+        raise RuntimeError("claude failed")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(main_mod, "stream_claude", boom)
+    monkeypatch.setattr(main_mod, "_chat_enabled", lambda _folder: True)
+    r = client.post("/api/chat", json={"message": "hi"})
+    assert r.status_code == 200
+    assert '"error": "claude failed"' in r.text
+    assert '"done": true' in r.text

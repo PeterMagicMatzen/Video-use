@@ -85,7 +85,7 @@ export default function App() {
   const shownRecents = payload?.recents ?? recents;
   const first = sources[0];
   const videoSrc = payload?.has_preview
-    ? `${API}/api/media/preview`
+    ? `${API}/api/media/preview${payload.preview_mtime != null ? `?t=${payload.preview_mtime}` : ""}`
     : first
       ? `${API}/api/media/source/${encodeURIComponent(first.name)}`
       : null;
