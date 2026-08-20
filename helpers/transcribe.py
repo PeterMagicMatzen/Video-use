@@ -113,6 +113,18 @@ def call_scribe(
     return resp.json()
 
 
+def transcript_path(edit_dir: Path, video: Path, audio_track: int = 0) -> Path:
+    """Where a video's transcript lands.
+
+    The track belongs in the name, or a rerun with --audio-track hands back the transcript of
+    the track it is meant to replace. Track 0 keeps the plain name, so transcripts made before
+    the flag existed stay valid. Batch mode tests its cache with this too — one function, so
+    the two cannot drift apart.
+    """
+    suffix = "" if audio_track == 0 else f".track{audio_track}"
+    return edit_dir / "transcripts" / f"{video.stem}{suffix}.json"
+
+
 def transcribe_one(
     video: Path,
     edit_dir: Path,
@@ -128,8 +140,7 @@ def transcribe_one(
     """
     transcripts_dir = edit_dir / "transcripts"
     transcripts_dir.mkdir(parents=True, exist_ok=True)
-    suffix = "" if audio_track == 0 else f".track{audio_track}"
-    out_path = transcripts_dir / f"{video.stem}{suffix}.json"
+    out_path = transcript_path(edit_dir, video, audio_track)
 
     if out_path.exists():
         if verbose:
