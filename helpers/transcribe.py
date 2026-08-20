@@ -61,12 +61,13 @@ def count_audio_tracks(video_path: Path) -> int:
 
 def peak_dbfs(wav_path: Path) -> float:
     """Peak level of a 16-bit PCM wav, in dBFS. -inf for digital silence."""
+    peak = 0
     with wave.open(str(wav_path), "rb") as w:
-        frames = w.readframes(w.getnframes())
-    if not frames:
-        return float("-inf")
-    samples = array.array("h", frames)
-    peak = max(max(samples), -min(samples)) if samples else 0
+        # A chunk at a time: batch mode runs several of these at once, and a two-hour
+        # take is 230 MB of 16 kHz mono before the array copy doubles it.
+        while frames := w.readframes(1 << 16):
+            samples = array.array("h", frames)
+            peak = max(peak, max(samples), -min(samples))
     return 20 * math.log10(peak / 32768) if peak > 0 else float("-inf")
 
 
@@ -127,7 +128,8 @@ def transcribe_one(
     """
     transcripts_dir = edit_dir / "transcripts"
     transcripts_dir.mkdir(parents=True, exist_ok=True)
-    out_path = transcripts_dir / f"{video.stem}.json"
+    suffix = "" if audio_track == 0 else f".track{audio_track}"
+    out_path = transcripts_dir / f"{video.stem}{suffix}.json"
 
     if out_path.exists():
         if verbose:
@@ -155,7 +157,7 @@ def transcribe_one(
                 f"track {audio_track + 1} of {video.name} is silent "
                 f"(peak {peak:.1f} dBFS) - not uploading. "
                 + (f"The file has {n_tracks} audio tracks; try --audio-track "
-                   f"{1 if audio_track == 0 else 0}."
+                   + " or ".join(str(i) for i in range(n_tracks) if i != audio_track) + "."
                    if n_tracks > 1 else "Check the source audio.")
             )
 
@@ -202,7 +204,8 @@ def main() -> None:
         type=int,
         default=0,
         help="Zero-based audio track to transcribe. OBS writes the game on track 0 "
-             "and the mic on track 1; ffmpeg would otherwise take track 0.",
+             "and the mic on track 1; without this ffmpeg applies its default audio "
+             "stream selection, which picks the track with the most channels.",
     )
     args = ap.parse_args()
 
