@@ -268,7 +268,8 @@ def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -
     """Lossless concat via the concat demuxer. No re-encode."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     concat_list = edit_dir / "_concat.txt"
-    concat_list.write_text("".join(f"file '{p.resolve()}'\n" for p in segment_paths))
+    concat_list.write_text("".join(f"file '{p.resolve()}'\n" for p in segment_paths),
+                           encoding="utf-8")
 
     cmd = [
         "ffmpeg", "-y",
@@ -380,7 +381,7 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
         lines.append(f"{_srt_timestamp(a)} --> {_srt_timestamp(b)}")
         lines.append(t)
         lines.append("")
-    out_path.write_text("\n".join(lines))
+    out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"master SRT → {out_path.name} ({len(entries)} cues)")
 
 

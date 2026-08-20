@@ -77,7 +77,7 @@ def get_preset(name: str) -> str:
 
 def _esc_filter_path(path: str) -> str:
     """A filesystem path safe to embed in an ffmpeg filter option value."""
-    return path.replace("\\", "/").replace(":", r"\:")
+    return path.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
 
 
 def _sample_frame_stats(
