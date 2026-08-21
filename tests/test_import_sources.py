@@ -241,11 +241,15 @@ class ImportSourcesTest(unittest.TestCase):
 
     def test_ytdlp_is_bounded_and_validates_reported_output(self):
         captured = []
+        runner_kwargs = []
 
         def fake_runner(command, **kwargs):
-            del kwargs
             captured.append(command)
-            output = Path(command[command.index("--paths") + 1]) / "id-title.mp4"
+            runner_kwargs.append(kwargs)
+            output_name = command[command.index("--output") + 1].replace(
+                "%(ext)s", "mp4"
+            )
+            output = Path(command[command.index("--paths") + 1]) / output_name
             output.write_bytes(b"video")
             return subprocess.CompletedProcess(
                 command, 0, stdout=f"{output}\n", stderr=""
@@ -259,7 +263,7 @@ class ImportSourcesTest(unittest.TestCase):
                 executable="yt-dlp",
                 verifier=lambda path: self.assertTrue(path.is_file()),
             )
-            self.assertEqual("id-title.mp4", output.name)
+            self.assertRegex(output.name, r"^source-[0-9a-f]{16}\.mp4$")
             self.assertTrue(output.is_file())
 
         self.assertIn("--no-playlist", captured[0])
@@ -269,11 +273,73 @@ class ImportSourcesTest(unittest.TestCase):
             captured[0][captured[0].index("--max-filesize") + 1],
         )
         self.assertIn("--force-overwrites", captured[0])
+        self.assertIn("--remux-video", captured[0])
+        self.assertEqual(
+            "best[ext=mp4]/best", captured[0][captured[0].index("--format") + 1]
+        )
+        self.assertTrue(callable(runner_kwargs[0]["preexec_fn"]))
+
+    def test_ytdlp_reuses_verified_destination_before_running(self):
+        url = "https://example.com/video"
+        verified = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            downloads = Path(temp_dir)
+            destination = import_sources._generic_destination(url, downloads)
+            destination.write_bytes(b"video")
+
+            output = import_sources.import_with_ytdlp(
+                url,
+                downloads,
+                executable="yt-dlp",
+                runner=lambda *args, **kwargs: self.fail(
+                    f"unexpected download: {args}, {kwargs}"
+                ),
+                verifier=lambda path: verified.append(path),
+            )
+
+            self.assertEqual(destination, output)
+            self.assertEqual([destination], verified)
+
+    def test_ytdlp_child_cannot_write_past_size_limit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            executable = root / "fake-yt-dlp"
+            executable.write_text(
+                """#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+root = Path(args[args.index("--paths") + 1])
+name = args[args.index("--output") + 1].replace("%(ext)s", "mp4")
+output = root / name
+output.write_bytes(b"12345")
+print(output)
+""",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            downloads = root / "downloads"
+
+            with self.assertRaisesRegex(import_sources.SourceImportError, "size limit"):
+                import_sources.import_with_ytdlp(
+                    "https://example.com/chunked-video",
+                    downloads,
+                    max_bytes=4,
+                    executable=str(executable),
+                    verifier=lambda path: self.fail(f"unexpected probe: {path}"),
+                )
+
+            self.assertEqual([], list(downloads.iterdir()))
 
     def test_ytdlp_rejects_oversize_output_without_publishing_it(self):
         def fake_runner(command, **kwargs):
             del kwargs
-            output = Path(command[command.index("--paths") + 1]) / "large.mp4"
+            output_name = command[command.index("--output") + 1].replace(
+                "%(ext)s", "mp4"
+            )
+            output = Path(command[command.index("--paths") + 1]) / output_name
             output.write_bytes(b"12345")
             return subprocess.CompletedProcess(
                 command, 0, stdout=f"{output}\n", stderr=""
@@ -295,7 +361,10 @@ class ImportSourcesTest(unittest.TestCase):
     def test_ytdlp_probe_failure_leaves_downloads_empty(self):
         def fake_runner(command, **kwargs):
             del kwargs
-            output = Path(command[command.index("--paths") + 1]) / "audio.mp4"
+            output_name = command[command.index("--output") + 1].replace(
+                "%(ext)s", "mp4"
+            )
+            output = Path(command[command.index("--paths") + 1]) / output_name
             output.write_bytes(b"audio")
             return subprocess.CompletedProcess(
                 command, 0, stdout=f"{output}\n", stderr=""

@@ -12,8 +12,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import os
+import resource
 import shutil
 import subprocess
 import sys
@@ -315,6 +317,31 @@ def _validate_generic_url(url: str) -> None:
         raise SourceImportError("Local network URLs are not supported.")
 
 
+def _generic_destination(url: str, downloads_dir: Path) -> Path:
+    source_id = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return downloads_dir / f"source-{source_id}.mp4"
+
+
+def _limit_child_file_size(max_bytes: int) -> Callable[[], None]:
+    def apply_limit() -> None:
+        soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        finite_limits = [max_bytes]
+        if soft != resource.RLIM_INFINITY:
+            finite_limits.append(soft)
+        if hard != resource.RLIM_INFINITY:
+            finite_limits.append(hard)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (min(finite_limits), hard))
+
+    return apply_limit
+
+
+def _staged_file_reached_limit(temp_root: Path, max_bytes: int) -> bool:
+    return any(
+        path.is_file() and path.stat().st_size >= max_bytes
+        for path in temp_root.rglob("*")
+    )
+
+
 def import_with_ytdlp(
     url: str,
     downloads_dir: Path,
@@ -325,6 +352,15 @@ def import_with_ytdlp(
     verifier: Callable[[Path], None] = verify_video,
 ) -> Path:
     _validate_generic_url(url)
+    destination = _generic_destination(url, downloads_dir)
+    if destination.exists() and not force:
+        if not destination.is_file():
+            raise SourceImportError("Import destination is not a regular file.")
+        if destination.stat().st_size > max_bytes:
+            raise SourceImportError("Video exceeds the configured size limit.")
+        verifier(destination)
+        return destination
+
     executable = executable or shutil.which("yt-dlp")
     if not executable:
         raise SourceImportError("yt-dlp is required for non-X URLs. Install it first.")
@@ -341,19 +377,31 @@ def import_with_ytdlp(
             "--restrict-filenames",
             "--merge-output-format",
             "mp4",
+            "--remux-video",
+            "mp4",
+            "--format",
+            "best[ext=mp4]/best",
             "--max-filesize",
             str(max_bytes),
             "--paths",
             str(temp_root),
             "--output",
-            "%(id)s-%(title).80B.%(ext)s",
+            f"{destination.stem}.%(ext)s",
             "--print",
             "after_move:filepath",
             "--force-overwrites",
             url,
         ]
-        result = runner(command, check=False, capture_output=True, text=True)
+        result = runner(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            preexec_fn=_limit_child_file_size(max_bytes),
+        )
         if result.returncode != 0:
+            if _staged_file_reached_limit(temp_root, max_bytes):
+                raise SourceImportError("Video exceeds the configured size limit.")
             raise SourceImportError("yt-dlp could not import the source URL.")
 
         output_lines = [
@@ -362,18 +410,16 @@ def import_with_ytdlp(
         if not output_lines:
             raise SourceImportError("yt-dlp did not report an output file.")
         output_path = Path(output_lines[-1]).resolve()
-        if output_path.parent != temp_root or not output_path.is_file():
+        if (
+            output_path.parent != temp_root
+            or output_path.name != destination.name
+            or not output_path.is_file()
+        ):
             raise SourceImportError("yt-dlp reported an unexpected output path.")
         if output_path.stat().st_size > max_bytes:
             raise SourceImportError("Video exceeds the configured size limit.")
         verifier(output_path)
 
-        destination = downloads_dir / output_path.name
-        if destination.exists() and not force:
-            if destination.stat().st_size > max_bytes:
-                raise SourceImportError("Video exceeds the configured size limit.")
-            verifier(destination)
-            return destination
         os.replace(output_path, destination)
         return destination
 
