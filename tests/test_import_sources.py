@@ -333,6 +333,33 @@ print(output)
 
             self.assertEqual([], list(downloads.iterdir()))
 
+    def test_ytdlp_fails_closed_without_posix_file_limits(self):
+        original_resource = import_sources._resource
+        import_sources._resource = None
+        try:
+            self.assertEqual(
+                "1893456789012345678",
+                import_sources.parse_x_post_id(
+                    "https://x.com/xquik/status/1893456789012345678"
+                ),
+            )
+            with (
+                tempfile.TemporaryDirectory() as temp_dir,
+                self.assertRaisesRegex(
+                    import_sources.SourceImportError, "hard child file-size limit"
+                ),
+            ):
+                import_sources.import_with_ytdlp(
+                    "https://example.com/video",
+                    Path(temp_dir),
+                    executable="yt-dlp",
+                    runner=lambda *args, **kwargs: self.fail(
+                        f"unexpected runner call: {args}, {kwargs}"
+                    ),
+                )
+        finally:
+            import_sources._resource = original_resource
+
     def test_ytdlp_rejects_oversize_output_without_publishing_it(self):
         def fake_runner(command, **kwargs):
             del kwargs

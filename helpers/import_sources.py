@@ -1,8 +1,8 @@
 """Import online videos into an edit session.
 
 X post URLs use Xquik's tweet lookup API to select the highest-bitrate MP4.
-Other HTTPS URLs use yt-dlp. Downloads are verified with ffprobe before they
-become visible in ``<edit_dir>/downloads``.
+Other HTTPS URLs use yt-dlp on platforms with POSIX file-size limits. Downloads
+are verified with ffprobe before they become visible in ``<edit_dir>/downloads``.
 
 Usage:
     python helpers/import_sources.py <url> [<url> ...]
@@ -15,7 +15,6 @@ import argparse
 import hashlib
 import ipaddress
 import os
-import resource
 import shutil
 import subprocess
 import sys
@@ -26,6 +25,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+
+try:
+    import resource as _resource
+except ImportError:
+    _resource = None
 
 XQUIK_TWEET_URL = "https://xquik.com/api/v1/x/tweets/{tweet_id}"
 X_POST_HOSTS = {
@@ -323,14 +327,20 @@ def _generic_destination(url: str, downloads_dir: Path) -> Path:
 
 
 def _limit_child_file_size(max_bytes: int) -> Callable[[], None]:
+    if _resource is None:
+        raise SourceImportError(
+            "Generic URL imports are unavailable because this platform cannot "
+            "enforce a hard child file-size limit."
+        )
+
     def apply_limit() -> None:
-        soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        soft, hard = _resource.getrlimit(_resource.RLIMIT_FSIZE)
         finite_limits = [max_bytes]
-        if soft != resource.RLIM_INFINITY:
+        if soft != _resource.RLIM_INFINITY:
             finite_limits.append(soft)
-        if hard != resource.RLIM_INFINITY:
+        if hard != _resource.RLIM_INFINITY:
             finite_limits.append(hard)
-        resource.setrlimit(resource.RLIMIT_FSIZE, (min(finite_limits), hard))
+        _resource.setrlimit(_resource.RLIMIT_FSIZE, (min(finite_limits), hard))
 
     return apply_limit
 
