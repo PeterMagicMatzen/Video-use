@@ -1,7 +1,7 @@
 """Import online videos into an edit session.
 
 X post URLs use Xquik's tweet lookup API to select the highest-bitrate MP4.
-Other HTTP(S) URLs use yt-dlp. Downloads are verified with ffprobe before they
+Other HTTPS URLs use yt-dlp. Downloads are verified with ffprobe before they
 become visible in ``<edit_dir>/downloads``.
 
 Usage:
@@ -35,6 +35,7 @@ X_POST_HOSTS = {
     "x.com",
 }
 X_MEDIA_HOSTS = {"video.twimg.com"}
+X_PROTECTED_DOMAINS = {"twitter.com", "twimg.com", "x.com"}
 DEFAULT_MAX_BYTES = 500 * 1024 * 1024
 
 
@@ -49,12 +50,16 @@ class VideoVariant:
 
 
 def _hostname(url: str) -> str:
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.hostname:
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+    except ValueError as error:
+        raise SourceImportError("Use a valid HTTPS URL.") from error
+    if parsed.scheme != "https" or not hostname:
         raise SourceImportError("Use a complete HTTPS URL.")
     if parsed.username or parsed.password:
         raise SourceImportError("URLs with embedded credentials are not supported.")
-    return parsed.hostname.rstrip(".").lower()
+    return hostname.rstrip(".").lower()
 
 
 def _host_matches(hostname: str, allowed_hosts: set[str]) -> bool:
@@ -194,6 +199,8 @@ def download_video(
     verifier: Callable[[Path], None] = verify_video,
 ) -> Path:
     if destination.exists() and not force:
+        if destination.stat().st_size > max_bytes:
+            raise SourceImportError("X video exceeds the configured size limit.")
         verifier(destination)
         return destination
 
@@ -203,7 +210,7 @@ def download_video(
         try:
             response = session.get(
                 url,
-                allow_redirects=True,
+                allow_redirects=False,
                 stream=True,
                 timeout=(10, 120),
             )
@@ -237,15 +244,20 @@ def download_video(
             ) as output:
                 temp_path = Path(output.name)
                 downloaded = 0
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if not chunk:
-                        continue
-                    downloaded += len(chunk)
-                    if downloaded > max_bytes:
-                        raise SourceImportError(
-                            "X video exceeds the configured size limit."
-                        )
-                    output.write(chunk)
+                try:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            raise SourceImportError(
+                                "X video exceeds the configured size limit."
+                            )
+                        output.write(chunk)
+                except requests.RequestException as error:
+                    raise SourceImportError(
+                        "X media download failed. Retry the import."
+                    ) from error
         finally:
             response.close()
 
@@ -285,6 +297,14 @@ def import_x_post(
 
 def _validate_generic_url(url: str) -> None:
     host = _hostname(url)
+    if any(
+        host == domain
+        or host.startswith(f"{domain}.")
+        or f".{domain}." in host
+        or host.endswith(f".{domain}")
+        for domain in X_PROTECTED_DOMAINS
+    ):
+        raise SourceImportError("Use a canonical X post URL for X media.")
     if host == "localhost":
         raise SourceImportError("Local network URLs are not supported.")
     try:
@@ -298,6 +318,7 @@ def _validate_generic_url(url: str) -> None:
 def import_with_ytdlp(
     url: str,
     downloads_dir: Path,
+    max_bytes: int = DEFAULT_MAX_BYTES,
     force: bool = False,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     executable: str | None = None,
@@ -309,34 +330,52 @@ def import_with_ytdlp(
         raise SourceImportError("yt-dlp is required for non-X URLs. Install it first.")
 
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    command = [
-        executable,
-        "--no-playlist",
-        "--restrict-filenames",
-        "--merge-output-format",
-        "mp4",
-        "--paths",
-        str(downloads_dir),
-        "--output",
-        "%(id)s-%(title).80B.%(ext)s",
-        "--print",
-        "after_move:filepath",
-        "--force-overwrites" if force else "--no-overwrites",
-        url,
-    ]
-    result = runner(command, check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise SourceImportError("yt-dlp could not import the source URL.")
+    with tempfile.TemporaryDirectory(
+        dir=downloads_dir.parent,
+        prefix=f".{downloads_dir.name}-import-",
+    ) as temp_name:
+        temp_root = Path(temp_name).resolve()
+        command = [
+            executable,
+            "--no-playlist",
+            "--restrict-filenames",
+            "--merge-output-format",
+            "mp4",
+            "--max-filesize",
+            str(max_bytes),
+            "--paths",
+            str(temp_root),
+            "--output",
+            "%(id)s-%(title).80B.%(ext)s",
+            "--print",
+            "after_move:filepath",
+            "--force-overwrites",
+            url,
+        ]
+        result = runner(command, check=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise SourceImportError("yt-dlp could not import the source URL.")
 
-    output_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if not output_lines:
-        raise SourceImportError("yt-dlp did not report an output file.")
-    output_path = Path(output_lines[-1]).resolve()
-    root = downloads_dir.resolve()
-    if output_path.parent != root or not output_path.is_file():
-        raise SourceImportError("yt-dlp reported an unexpected output path.")
-    verifier(output_path)
-    return output_path
+        output_lines = [
+            line.strip() for line in result.stdout.splitlines() if line.strip()
+        ]
+        if not output_lines:
+            raise SourceImportError("yt-dlp did not report an output file.")
+        output_path = Path(output_lines[-1]).resolve()
+        if output_path.parent != temp_root or not output_path.is_file():
+            raise SourceImportError("yt-dlp reported an unexpected output path.")
+        if output_path.stat().st_size > max_bytes:
+            raise SourceImportError("Video exceeds the configured size limit.")
+        verifier(output_path)
+
+        destination = downloads_dir / output_path.name
+        if destination.exists() and not force:
+            if destination.stat().st_size > max_bytes:
+                raise SourceImportError("Video exceeds the configured size limit.")
+            verifier(destination)
+            return destination
+        os.replace(output_path, destination)
+        return destination
 
 
 def main() -> None:
@@ -386,6 +425,7 @@ def main() -> None:
                         import_with_ytdlp(
                             source,
                             downloads_dir,
+                            max_bytes=args.max_size_mb * 1024 * 1024,
                             force=args.force,
                         )
                     ]

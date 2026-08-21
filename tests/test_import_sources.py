@@ -21,6 +21,8 @@ class FakeResponse:
 
     def iter_content(self, chunk_size):
         del chunk_size
+        if isinstance(self.body, Exception):
+            raise self.body
         yield self.body
 
     def close(self):
@@ -57,6 +59,10 @@ class ImportSourcesTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(import_sources.SourceImportError, "15 to 20"):
             import_sources.parse_x_post_id("https://x.com/user/status/123")
+
+    def test_malformed_bracketed_host_is_a_source_error(self):
+        with self.assertRaisesRegex(import_sources.SourceImportError, "valid HTTPS"):
+            import_sources._validate_generic_url("https://[::1")
 
     def test_selects_highest_bitrate_mp4_for_each_video(self):
         payload = {
@@ -173,6 +179,7 @@ class ImportSourcesTest(unittest.TestCase):
                 )
             self.assertFalse(destination.exists())
             self.assertEqual([], list(Path(temp_dir).glob("*.part")))
+            self.assertFalse(session.calls[0][1]["allow_redirects"])
 
     def test_download_enforces_streamed_size_limit(self):
         session = FakeSession(
@@ -210,6 +217,28 @@ class ImportSourcesTest(unittest.TestCase):
             )
             self.assertEqual(b"video", output.read_bytes())
 
+    def test_stream_failure_is_wrapped_and_removes_partial_file(self):
+        session = FakeSession(
+            [
+                FakeResponse(
+                    url="https://video.twimg.com/video.mp4",
+                    body=import_sources.requests.ConnectionError("stream failed"),
+                )
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(
+                import_sources.SourceImportError, "download failed"
+            ):
+                import_sources.download_video(
+                    "https://video.twimg.com/video.mp4",
+                    Path(temp_dir) / "video.mp4",
+                    session,
+                    max_bytes=10,
+                )
+            self.assertEqual([], list(Path(temp_dir).iterdir()))
+
     def test_ytdlp_is_bounded_and_validates_reported_output(self):
         captured = []
 
@@ -230,11 +259,80 @@ class ImportSourcesTest(unittest.TestCase):
                 executable="yt-dlp",
                 verifier=lambda path: self.assertTrue(path.is_file()),
             )
+            self.assertEqual("id-title.mp4", output.name)
+            self.assertTrue(output.is_file())
 
-        self.assertEqual("id-title.mp4", output.name)
         self.assertIn("--no-playlist", captured[0])
         self.assertIn("--restrict-filenames", captured[0])
-        self.assertIn("--no-overwrites", captured[0])
+        self.assertEqual(
+            str(import_sources.DEFAULT_MAX_BYTES),
+            captured[0][captured[0].index("--max-filesize") + 1],
+        )
+        self.assertIn("--force-overwrites", captured[0])
+
+    def test_ytdlp_rejects_oversize_output_without_publishing_it(self):
+        def fake_runner(command, **kwargs):
+            del kwargs
+            output = Path(command[command.index("--paths") + 1]) / "large.mp4"
+            output.write_bytes(b"12345")
+            return subprocess.CompletedProcess(
+                command, 0, stdout=f"{output}\n", stderr=""
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            downloads = Path(temp_dir) / "downloads"
+            with self.assertRaisesRegex(import_sources.SourceImportError, "size limit"):
+                import_sources.import_with_ytdlp(
+                    "https://example.com/video",
+                    downloads,
+                    max_bytes=4,
+                    runner=fake_runner,
+                    executable="yt-dlp",
+                    verifier=lambda path: self.fail(f"unexpected probe: {path}"),
+                )
+            self.assertEqual([], list(downloads.iterdir()))
+
+    def test_ytdlp_probe_failure_leaves_downloads_empty(self):
+        def fake_runner(command, **kwargs):
+            del kwargs
+            output = Path(command[command.index("--paths") + 1]) / "audio.mp4"
+            output.write_bytes(b"audio")
+            return subprocess.CompletedProcess(
+                command, 0, stdout=f"{output}\n", stderr=""
+            )
+
+        def reject_video(path):
+            raise import_sources.SourceImportError(f"invalid video: {path.name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            downloads = Path(temp_dir) / "downloads"
+            with self.assertRaisesRegex(
+                import_sources.SourceImportError, "invalid video"
+            ):
+                import_sources.import_with_ytdlp(
+                    "https://example.com/video",
+                    downloads,
+                    runner=fake_runner,
+                    executable="yt-dlp",
+                    verifier=reject_video,
+                )
+            self.assertEqual([], list(downloads.iterdir()))
+
+    def test_ytdlp_rejects_x_host_lookalikes_before_running(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            self.assertRaisesRegex(
+                import_sources.SourceImportError, "canonical X post"
+            ),
+        ):
+            import_sources.import_with_ytdlp(
+                "https://x.com.attacker.example/video",
+                Path(temp_dir),
+                executable="yt-dlp",
+                runner=lambda *args, **kwargs: self.fail(
+                    f"unexpected runner call: {args}, {kwargs}"
+                ),
+            )
 
     def test_verify_video_requires_a_video_stream(self):
         def failed_probe(command, **kwargs):
