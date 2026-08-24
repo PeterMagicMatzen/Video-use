@@ -26,6 +26,7 @@ import json
 import re
 import subprocess
 import sys
+from fractions import Fraction
 from pathlib import Path
 
 try:
@@ -146,24 +147,48 @@ def is_portrait_source(video: Path) -> bool:
         return False
 
 
-def probe_source_fps(video: Path) -> str | None:
-    """Return the source's frame rate as an ffmpeg-ready string (e.g. '60/1',
-    '30000/1001'), or None if it can't be determined.
+def parse_fps(value: str) -> str:
+    """Validate an ffmpeg frame rate while preserving its original spelling."""
+    text = value.strip()
+    try:
+        rate = Fraction(text)
+    except (ValueError, ZeroDivisionError) as exc:
+        raise argparse.ArgumentTypeError(
+            "FPS must be a positive number or rational, e.g. 30 or 30000/1001"
+        ) from exc
+    if rate <= 0:
+        raise argparse.ArgumentTypeError("FPS must be greater than zero")
+    return text
 
-    Returned verbatim so fractional rates (29.97, 23.976) survive without
-    rounding when passed straight to ffmpeg's `-r`.
+
+def probe_source_fps(video: Path) -> str | None:
+    """Return an ffmpeg-ready source rate, preferring the average frame rate.
+
+    ``avg_frame_rate`` represents the observed average and is the better default
+    for variable-frame-rate inputs. ``r_frame_rate`` remains a fallback for
+    streams where the average is unavailable. Values are returned verbatim so
+    rates such as ``30000/1001`` survive without rounding.
     """
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=r_frame_rate",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+             "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+             "-of", "json", str(video)],
             capture_output=True, text=True, check=True,
         )
-        val = out.stdout.strip()
-        return val if val and val != "0/0" else None
-    except Exception:
+        streams = json.loads(out.stdout).get("streams") or []
+        if not streams:
+            return None
+        for field in ("avg_frame_rate", "r_frame_rate"):
+            value = streams[0].get(field)
+            if value and value != "0/0":
+                try:
+                    return parse_fps(value)
+                except argparse.ArgumentTypeError:
+                    continue
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
         return None
+    return None
 
 
 # -------- Per-segment extraction (Rule 2 + Rule 3) --------------------------
@@ -243,7 +268,7 @@ def extract_all_segments(
     edit_dir: Path,
     preview: bool,
     draft: bool = False,
-    fps: int | None = None,
+    fps: str | None = None,
 ) -> list[Path]:
     """Extract every EDL range into edit_dir/clips_graded/seg_NN.mp4.
     Returns the ordered list of segment paths.
@@ -268,7 +293,7 @@ def extract_all_segments(
     # EDLs that mix rates (e.g. a 30fps and a 60fps source) and break the concat.
     # Explicit --fps wins; otherwise preserve the first source's rate.
     if fps is not None:
-        out_rate = str(fps)
+        out_rate = parse_fps(str(fps))
     elif ranges:
         first_src = resolve_path(sources[ranges[0]["source"]], edit_dir)
         out_rate = probe_source_fps(first_src) or "24"
@@ -645,10 +670,11 @@ def main() -> None:
     )
     ap.add_argument(
         "--fps",
-        type=int,
+        type=parse_fps,
         default=None,
         help="Output frame rate. Default: preserve the source's frame rate "
-             "(falls back to 24 if it can't be probed). Pass e.g. --fps 30 to force.",
+             "(falls back to 24 if it can't be probed). Pass e.g. --fps 30 or "
+             "--fps 30000/1001 to force.",
     )
     args = ap.parse_args()
 
