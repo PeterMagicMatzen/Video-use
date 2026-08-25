@@ -1,55 +1,71 @@
 ---
 format: 1920x1080
-message: Create a photorealistic cinematic live-action film of a church interior and pipe organ.
-arc: Threshold → Procession → Performance → Resonance
-audience: Viewers drawn to sacred architecture, live organ music, and cinematic cultural films
-style: photorealistic live-action cinematography, natural materials, physically accurate lighting, realistic camera movement, documentary-level detail
+message: Create a photorealistic cinematic live-action film based exclusively on the visual language and camera movement of `Mein Film.mov`.
+arc: Tower Reveal → Aerial Pullback → Architectural Reveal → Wide Establishing Hold
+audience: Viewers drawn to historic churches, sacred architecture, aerial cinematography, and cinematic cultural films
+style: photorealistic live-action drone cinematography, real architecture, natural daylight, physically plausible aerial movement, documentary-level detail
+reference_primary: Mein Film.mov
+reference_scope: This storyboard is intentionally based only on the available `Mein Film.mov` reference. `IMG_1775.mov` and `IMG_2313.MOV` are not used for this version.
 ---
 
-## Scene 1 — Entering the Nave
-- duration: 2.5s
-- transition_in: fade from black
-- visual_style: photorealistic live-action footage
-- status: approved
-- src: compositions/frames/01-entering-the-nave.html
+## Core production rule
 
-Begin in darkness, then reveal a real historic church as a cinema camera crosses the entrance at a walking pace on a smooth, physically plausible dolly or stabilized handheld path. Stone walls, wooden pews, columns, vaulted ceilings, and the distant organ loft emerge naturally; daylight through real windows mixes with small pools of warm interior light. The pipe organ is visible from the start as a believable physical destination. No text, graphics, overlays, geometric elements, animated backgrounds, or artificial visual effects appear.
+The reference video is the primary visual source. Reproduce its real-world photographic character, vertical composition, slow aerial movement, framing logic, natural daylight, and gradual spatial reveal. The result must look like footage captured by a real drone/cinema camera over a real historic church.
 
-## Scene 2 — Moving Through the Nave
-- duration: 2.5s
-- transition_in: natural cinematic cut
-- visual_style: photorealistic live-action footage
-- status: approved
-- src: compositions/frames/02-moving-through-the-nave.html
+Do NOT create motion graphics. Do NOT use HTML shapes as visual content. Do NOT use vector illustrations, animated geometric elements, graphic overlays, HUDs, diagrams, glowing outlines, abstract backgrounds, synthetic particles, 3D-rendered architecture, game-engine environments, or mathematically perfect virtual camera paths. Every visible architectural element must behave like a real photographed object. Camera movement must remain physically plausible for a drone.
 
-Continue down the central aisle with restrained, human-operated forward movement. Pews and columns pass naturally in the foreground while the organ stays framed as the destination; perspective and parallax come only from the camera's physical motion. Let exposure breathe subtly as the camera moves between window light and shadow, preserving a quiet, reverent atmosphere without a floating, impossible, or mathematically perfect camera path.
-
-## Scene 3 — The Organist and Instrument
+## Scene 1 — Tower Emerging Through the Trees
 - duration: 3s
-- transition_in: cinematic dissolve
-- visual_style: photorealistic close-up cinematography
-- status: approved
-- src: compositions/frames/03-the-organist-and-instrument.html
+- transition_in: fade from black
+- visual_style: photorealistic live-action aerial footage
+- status: reference-based
 
-Move to a close, slightly oblique view of a real pipe organ: aged polished wood, keyboards, stop knobs, mechanical details, and metal and wooden pipes have realistic reflections, dust, and small surface imperfections. An organist plays naturally, with physically accurate hands, clothing, posture, and interaction with the console; use shallow depth of field only where an actual cinema lens would produce it. Warm instrument light is balanced against cooler church shadows, with no glowing pipes, synthetic rays, particles, or digital effects.
+Open on a tight vertical aerial view matching the beginning of `Mein Film.mov`: the historic church tower rises behind and partly through dense green tree foliage. The steeple and dark roof dominate the center of frame. Begin relatively close to the architecture. The drone is already moving gently, with no artificial acceleration. Preserve the natural vertical framing and the slightly compressed feeling of the original reference. Real daylight, real trees, real roof textures, and natural atmospheric depth only.
 
-## Scene 4 — Resonance
+## Scene 2 — Slow Aerial Pullback
+- duration: 3s
+- transition_in: continuous movement, no graphic transition
+- visual_style: photorealistic live-action drone footage
+- status: reference-based
+
+Continue the same uninterrupted aerial movement. The drone gradually pulls backward and/or rises, revealing more of the church roof and the full steeple. The tower remains close to the central axis while the surrounding tree canopy becomes increasingly visible. Motion should feel like a single real drone flight rather than a digitally animated zoom. Maintain natural parallax and realistic perspective changes.
+
+## Scene 3 — Full Church Reveal
 - duration: 2s
-- transition_in: natural cinematic crossfade
-- visual_style: photorealistic live-action footage
-- status: approved
-- src: compositions/frames/04-resonance.html
+- transition_in: continuous aerial shot
+- visual_style: photorealistic live-action drone footage
+- status: reference-based
 
-Return to a wider real-world view of the pipe organ integrated into the church architecture. Hold almost still, allowing only extremely subtle natural operator movement, while the final organ chord opens into the room; stone, wood, ambient haze, and restrained film grain remain visible in physically plausible light. Reduce the image gradually to darkness with a natural cinematic fade.
+The camera continues opening the frame until the main body of the church becomes clearly readable from above. Reveal the roof geometry, nave, surrounding trees, streets, and neighboring buildings in the same gradual manner seen in `Mein Film.mov`. The church remains the visual anchor. Do not introduce an interior, organ, people, typography, logos, or invented architectural details that are not supported by the reference.
 
-## Overall cinematography
+## Scene 4 — Wide Establishing Hold
+- duration: 2s
+- transition_in: natural continuation of the aerial movement
+- visual_style: photorealistic live-action aerial footage
+- status: reference-based
 
-The finished 10-second film must read as professional documentary or cinematic footage recorded inside a real church, not as motion graphics, animation, illustration, an abstract composition, or a 3D-rendered environment. Prioritize authentic architectural proportions, natural depth of field, gentle highlight roll-off, realistic exposure, subtle lens imperfections, natural motion blur, restrained cinematic grading, and believable human movement. Do not use text overlays, HUD elements, diagrams, icons, wireframes, animated shapes, glowing outlines, synthetic particle effects, artificial geometry, or impossible camera trajectories.
+Finish on a wider elevated view corresponding to the final section of `Mein Film.mov`, with the entire church and its urban/green surroundings visible. The drone movement becomes extremely subtle rather than stopping unnaturally. Let the real scene breathe for the final moment, then fade naturally to black. Preserve natural daylight and realistic image texture through the final frame.
+
+## Camera and movement specification
+
+Use a real-drone visual language throughout. The dominant movement is a slow, stable aerial pullback and rise, moving from a relatively close tower view toward a wide establishing view. Avoid lateral swoops, orbiting, impossible vertical acceleration, dolly-like interior movement, or virtual camera interpolation. The camera should feel operator-controlled and physically constrained.
+
+The reference is vertically framed. If the final output must be 1920x1080, adapt the composition by extending the photographed environment naturally rather than inventing graphic side panels or cropping away the central tower. Keep the church steeple as the principal axis of the composition.
+
+## Lighting and image treatment
+
+Use natural outdoor daylight matching the reference. Preserve realistic exposure changes, atmospheric perspective, foliage detail, roof texture, subtle lens characteristics, natural motion blur, and restrained cinematic grading. No artificial sun rays, bloom, volumetric graphics, glowing architecture, synthetic haze, or exaggerated color grading.
+
+## Editing
+
+The preferred structure is one continuous-feeling aerial movement across the full 10 seconds. Avoid fast cuts. If the production system requires scene segmentation, transitions must be invisible or natural and must preserve the impression of one physically continuous drone flight.
 
 ## Reference handling
 
-Use `Mein Film.mov` as the primary visual reference for physical characteristics—church architecture, organ appearance, camera perspective, framing, lighting, movement, rhythm, and transitions—when it is available in the working directory. It is not currently present in this checkout, so no claimed reference analysis has been made and final layouts must be reconciled against the actual clip before production.
+`Mein Film.mov` is the sole visual reference for this storyboard. The supplied frame sequence shows a real vertical aerial shot that begins close on the church tower, partially framed by trees, and gradually pulls back/rises to reveal the complete church and its surrounding town and greenery. This observed movement and composition must be treated as the source of truth.
 
-## Review checkpoint
+`IMG_1775.mov` and `IMG_2313.MOV` are deliberately excluded from this version and must not influence the composition.
 
-This storyboard is approved as a live-action cinematography brief. The four-scene sequence and its restrained, reverent treatment are confirmed. Visual sketches may proceed as composition studies; final production still requires photorealistic live-action source imagery and reconciliation against the reference clip when it is available.
+## Final acceptance criteria
+
+The finished result must immediately read as real drone footage of a real historic church. If a frame looks like a motion-graphics template, illustration, 3D render, animated website composition, or abstract graphic, it fails the brief. The camera movement, architecture, lighting, perspective, foliage, and environmental detail must all be physically believable and photographically coherent with `Mein Film.mov`.
